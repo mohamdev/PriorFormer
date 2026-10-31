@@ -107,7 +107,7 @@ MPJPE (mm) on the **test clips**, 10 cameras per clip ([`results/`](results) has
 | **Task average** | | 34.6 ± 9.4 | 36.1 ± 9.5 | 38.5 ± 10.2 | 40.0 ± 10.3 |
 | **All test clips** | 800 | 39.3 ± 29.9 | 40.4 ± 30.1 | 43.4 ± 31.0 | 44.6 ± 31.2 |
 
-The paper's Table II averages were 36.4 / 38.7 / 39.2 / 41.2 mm. Paired over the 800 test clips, masking the camera prior adds 1.1 mm (95% bootstrap CI 1.0–1.2), masking the segment prior 4.1 mm (3.8–4.5) and masking both 5.3 mm (5.0–5.8); full priors beat no priors on 97% of clips. The priors help consistently but modestly, and the model stays accurate without them.
+The paper's Table II averages were 36.4 / 38.7 / 39.2 / 41.2 mm. Paired over the 800 test clips, masking the camera prior adds 1.1 mm (95% bootstrap CI 1.0–1.2), masking the segment prior 4.1 mm (3.8–4.5) and masking both 5.3 mm (5.0–5.8); full priors beat no priors on 97% of clips. Excluding the 44 test clips that duplicate or nearly duplicate a training clip (Corrections 8) changes the task average by at most 0.1 mm. The priors help consistently but modestly, and the model stays accurate without them.
 
 **Expert model** (Table I): the reproduction is being retrained with whole-clip validation; results will be added here.
 
@@ -122,6 +122,7 @@ An audit of the code against the paper found the following. The released model, 
 5. **Description mismatches:** the split is 80/20, not 90/10; joints come from SMPL-X vertices; camera distance scales with body size and is not 1.5–3.5 m; the segments are the joint pairs above, not forearm/upper arm/bi-acromial/spine/thigh/shank; the bone-length loss uses 12 edges on all frames, not six pairs at the central frame; the versatile model's cosine schedule was set for 20 epochs and the best checkpoint (epoch 12) kept, not 10 epochs.
 6. **Two segment priors are not rigid.** The shoulder joint is a single surface vertex that moves with the shoulder girdle, so *shoulder width* and *R shoulder–R hip* vary within a clip (median range 22 and 33 mm, 90th percentile 92 and 81 mm, over 300 test clips), against 2–16 mm for the limb segments.
 7. **All bodies have a template shape.** Preprocessing did not apply the AMASS shape coefficients (betas), so every subject has the SMPL-X template body of their gender: limb lengths take essentially two values (e.g. R forearm 242 or 267 mm). The data therefore has many subjects' motions but only two body shapes, and the segment prior carries little more than the template's gender. The segment prior's benefit may therefore come largely from telling the two templates apart, and generalization to other body proportions is untested.
+8. **Duplicates across the split.** AMASS contains duplicate recordings, and the random split put some of them on both sides: 8 test clips are exact copies of a training clip under another name, and 36 more are within 30 mm (mean joint distance) of a same-length training clip, mostly with the same motion name (likely duplicate trials). They are listed in [`splits/test_clips_near_train.tsv`](splits/test_clips_near_train.tsv); excluding them changes the results by less than 1 mm.
 
 A corrected arXiv version will follow.
 
