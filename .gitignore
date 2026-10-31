@@ -5,3 +5,6 @@ __pycache__/
 /checkpoints/
 /runs/
 /data/
+
+# Private cluster notes (not for the public repo)
+/docs/pfcalcul-howto-for-priorformer.md
