@@ -1,6 +1,6 @@
 """Train the Backbone, or fine-tune it into the Expert or Versatile model.
 
-    python -m priorformer.train --mode expert --data <processed train clips> \
+    python -m priorformer.train --model expert --data <processed train clips> \
         --init checkpoints/best_lifter_128_ddp_epoch50.pt --epochs 10 --out runs/expert
 
 Validation holds out whole training clips (never windows of clips that are trained on), and
@@ -20,15 +20,15 @@ from tqdm import tqdm
 
 from priorformer.data import WINDOW, WindowDataset, load_clips
 from priorformer.losses import total_loss
-from priorformer.model import MASKING_MODES, TransformerLifter, mask_priors
+from priorformer.model import MASKING_MODES, TransformerLifter, load_lifter, mask_priors
 from priorformer.splits import split_clips
 
 VAL_STRIDE = 4  # validate on every 4th window of the held-out clips
 
 
-def train_modes(mode):
+def train_masking_modes(model_name):
     """Masking modes drawn uniformly per batch during training."""
-    return list(MASKING_MODES) if mode == "versatile" else ["full_priors"]
+    return list(MASKING_MODES) if model_name == "versatile" else ["full_priors"]
 
 
 def to_device(batch, device):
@@ -51,10 +51,10 @@ def validate(model, loader, modes, device):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", required=True, choices=["backbone", "expert", "versatile"])
+    p.add_argument("--model", required=True, choices=["backbone", "expert", "versatile"])
     p.add_argument("--data", required=True, help="folder of processed training clips (.npz)")
     p.add_argument("--init", help="checkpoint to start from (required for expert/versatile)")
-    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--epochs", type=int, help="default: 50 for the backbone, 10 for fine-tuning")
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--lr", type=float, help="default: 1e-3 for the backbone, 1e-4 for fine-tuning")
     p.add_argument("--val-fraction", type=float, default=0.05)
@@ -63,9 +63,11 @@ def main():
     p.add_argument("--amp", action="store_true")
     p.add_argument("--out", required=True)
     args = p.parse_args()
-    if args.mode != "backbone" and not args.init:
+    finetune = args.model != "backbone"
+    if finetune and not args.init:
         p.error("--init is required for fine-tuning")
-    args.lr = args.lr or (1e-3 if args.mode == "backbone" else 1e-4)
+    args.lr = args.lr or (1e-4 if finetune else 1e-3)
+    args.epochs = args.epochs or (10 if finetune else 50)
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -81,16 +83,14 @@ def main():
     print(f"{len(train_names)} train clips ({len(train_ds)} windows), {len(val_names)} val clips ({len(val_ds)} windows)")
     val_loader = DataLoader(val_ds, batch_size=512, num_workers=args.workers, pin_memory=True)
 
-    model = TransformerLifter().to(device)
-    if args.init:
-        model.load_state_dict(torch.load(args.init, map_location=device, weights_only=False)["model_state_dict"])
-    if args.mode != "backbone":
+    model = load_lifter(args.init, device) if args.init else TransformerLifter().to(device)
+    if finetune:
         for name, prm in model.named_parameters():
             prm.requires_grad = name.startswith(("transformer.", "regressor."))
     opt = torch.optim.AdamW([prm for prm in model.parameters() if prm.requires_grad], lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
     scaler = torch.amp.GradScaler(enabled=args.amp)
-    modes = train_modes(args.mode)
+    modes = train_masking_modes(args.model)
     config = {**vars(args), "window": WINDOW, "train_clips": len(train_names), "val_clips": len(val_names)}
 
     best = float("inf")

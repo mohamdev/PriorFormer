@@ -20,8 +20,10 @@ import numpy as np
 import torch
 from human_body_prior.body_model.body_model import BodyModel
 
+from priorformer.skeleton import JOINT_NAMES
+
 REPO = Path(__file__).resolve().parents[1]
-JOINT_VERTICES = {  # joint -> markers whose vertices are averaged, in model joint order
+JOINT_VERTICES = {  # joint -> named SMPL-X vertices that are averaged
     "r_shoulder": ["rshoulder"], "l_shoulder": ["lshoulder"],
     "r_elbow": ["r_lelbow", "r_melbow"], "l_elbow": ["l_lelbow", "l_melbow"],
     "r_wrist": ["r_lwrist", "r_mwrist"], "l_wrist": ["l_lwrist", "l_mwrist"],
@@ -32,24 +34,26 @@ JOINT_VERTICES = {  # joint -> markers whose vertices are averaged, in model joi
 NUM_BETAS = 16
 
 
-def marker_vertices():
+def named_vertices():
     with open(REPO / "smpl" / "amass" / "vertices_keypoints_corr.csv", encoding="utf-8-sig") as f:
         return {row["Name"]: int(row["Index"]) for row in csv.DictReader(f)}
 
 
 def pelvis_frame_joints(verts, markers):
-    """(F,V,3) mesh vertices -> (F,12,3) joints in the pelvis frame of the first frame."""
-    joints = np.stack([verts[:, [markers[m] for m in ms]].mean(axis=1) for ms in JOINT_VERTICES.values()], axis=1)
-    joints -= (joints[:, 6:7] + joints[:, 7:8]) / 2                      # mid-hip origin, every frame
-    y = joints[0, 6] - joints[0, 7]
+    """(F,V,3) mesh vertices -> (F,12,3) joints in the pelvis frame, its rotation, and the first mid-hip."""
+    joints = np.stack([verts[:, [markers[m] for m in JOINT_VERTICES[j]]].mean(axis=1) for j in JOINT_NAMES], axis=1)
+    r_hip, l_hip, r_sh, l_sh = (JOINT_NAMES.index(j) for j in ["r_hip", "l_hip", "r_shoulder", "l_shoulder"])
+    hip_mid = (joints[:, r_hip] + joints[:, l_hip]) / 2
+    joints -= hip_mid[:, None]                                           # mid-hip origin, every frame
+    y = joints[0, r_hip] - joints[0, l_hip]
     y /= np.linalg.norm(y) + 1e-8                                        # left -> right hip
-    z = (joints[0, 0] + joints[0, 1]) / 2
+    z = (joints[0, r_sh] + joints[0, l_sh]) / 2
     z /= np.linalg.norm(z) + 1e-8                                        # towards mid-shoulder
     x = np.cross(y, z)
     x /= np.linalg.norm(x) + 1e-8
     z = np.cross(x, y)
     R = np.stack([x, y, z])
-    return joints @ R.T, R
+    return joints @ R.T, R, hip_mid[0]
 
 
 def main():
@@ -61,7 +65,7 @@ def main():
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    markers = marker_vertices()
+    markers = named_vertices()
     body_models = {}
     for split in ["train", "test"]:
         out_dir = Path(args.out) / split
@@ -86,8 +90,7 @@ def main():
                 params["betas"] = betas.expand(len(poses), -1)
             with torch.no_grad():
                 verts = body_models[gender](**params).v.cpu().numpy()
-            joints, R = pelvis_frame_joints(verts, markers)
-            hip_mid = (verts[0, [markers["r_ASIS"], markers["r_PSIS"], markers["l_ASIS"], markers["l_PSIS"]]]).mean(0)
+            joints, R, hip_mid = pelvis_frame_joints(verts, markers)
             np.savez(out_dir / row["processed_file"], joints_3d=joints.astype(np.float32), R=R, t=hip_mid)
         print(f"{split}: {len(rows)} clips -> {out_dir}")
 

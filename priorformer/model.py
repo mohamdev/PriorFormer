@@ -13,7 +13,7 @@ D_MODEL = 128
 N_HEAD = 4
 N_LAYERS = 4
 D_FF = 256
-D_IN = 2 + 3 + N_SEGMENTS  # 2D keypoint + camera prior + segment prior
+D_IN = 2 + 3 + N_SEGMENTS  # 2D joint + camera prior + segment prior
 
 
 class PositionalEncoding(nn.Module):

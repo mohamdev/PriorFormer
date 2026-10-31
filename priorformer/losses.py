@@ -29,7 +29,8 @@ def reprojection_loss(pred, x2d, K, R, t):
 
 def total_loss(pred, batch):
     """Returns (loss, metrics) with loss = MPJPE + bone + 0.01 * reprojection / image width."""
-    lm = mpjpe(pred, batch["y3d"])
-    lb = bone_loss(pred, batch["y3d"])
-    lr = reprojection_loss(pred, batch["x2d"], batch["K"], batch["R"], batch["t"])
-    return lm + lb + REPROJ_WEIGHT * lr / IMG_W, {"mpjpe": lm.item(), "bone": lb.item(), "reproj_px": lr.item()}
+    pose_err = mpjpe(pred, batch["y3d"])
+    bone_err = bone_loss(pred, batch["y3d"])
+    reproj_px = reprojection_loss(pred, batch["x2d"], batch["K"], batch["R"], batch["t"])
+    loss = pose_err + bone_err + REPROJ_WEIGHT * reproj_px / IMG_W
+    return loss, {"mpjpe": pose_err.item(), "bone": bone_err.item(), "reproj_px": reproj_px.item()}

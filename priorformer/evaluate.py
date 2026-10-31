@@ -59,6 +59,7 @@ def evaluate_clips(model, clips, n_cameras, seed, modes, clip_index=None):
     errors = {mode: {} for mode in modes}
     for name, clip in tqdm(clips.items(), desc="clips", mininterval=10):
         if len(clip) < WINDOW:
+            print(f"[warn] skipping {name}: {len(clip)} frames < one Window")
             continue
         per_cam = {mode: [] for mode in modes}
         for cam in range(n_cameras):

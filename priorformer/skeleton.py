@@ -7,9 +7,9 @@ JOINT_NAMES = [
 ]
 N_JOINTS = len(JOINT_NAMES)
 
-# Joint pairs whose distances form the segment prior, in this order.
+# Joint pairs whose distances form the segment prior, in this order:
+# R forearm, L forearm, shoulder width, R shoulder-R hip, R thigh, L thigh.
 SEGMENT_PAIRS = [(2, 4), (3, 5), (0, 1), (0, 6), (6, 8), (7, 9)]
-SEGMENT_NAMES = ["r_forearm", "l_forearm", "shoulder_width", "r_shoulder_hip", "r_thigh", "l_thigh"]
 N_SEGMENTS = len(SEGMENT_PAIRS)
 
 SEG_NORM = 2.0
