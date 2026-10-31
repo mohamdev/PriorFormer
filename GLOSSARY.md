@@ -22,8 +22,16 @@ _Avoid_: masked model
 The 12 joint centers (shoulders, elbows, wrists, hips, knees, ankles), each the barycenter of fixed SMPL-X mesh vertices.
 _Avoid_: keypoints, markers
 
+**Keypoint set**:
+The 17 COCO 2D points (nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles) given to the model as input, as an off-the-shelf 2D detector outputs them. Distinct from the Joint set.
+_Avoid_: joints (for the 2D input), COCO joints
+
 **Window**:
 The 13 consecutive frames the model lifts at once.
+
+**Sliding window warmup**:
+The start of a live session, while the Window holds fewer than 13 real frames; the model then sees only the frames received so far.
+_Avoid_: warm-up, cold start, padding phase
 
 **Prior**:
 Optional per-clip geometric information given to the model: the Camera prior or the Segment prior.
@@ -40,6 +48,16 @@ _Avoid_: bone lengths, anatomical lengths, segment lengths (when meaning the CSV
 **Masking mode**:
 Which Priors are zeroed at inference or training: full priors, camera masked, segments masked, or no priors.
 _Avoid_: ablation setting
+
+## Bodies
+
+**Body parametric model**:
+A family of human bodies driven by shape and pose parameters: SOMA, SMPL-X, MHR or Anny.
+_Avoid_: body model (alone)
+
+**Body shape**:
+One parameter vector of a Body parametric model, fixing one person's proportions and bone lengths.
+_Avoid_: body identity, betas (outside SMPL-X), subject
 
 ## Data
 
