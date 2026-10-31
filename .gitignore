@@ -1,6 +1,7 @@
-/smpl/amass/
 /smpl/models/
-*.csv
 *.pt
+*.onnx
 __pycache__/
-/LogsLifter/
+/checkpoints/
+/runs/
+/data/
