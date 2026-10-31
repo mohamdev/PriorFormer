@@ -1,0 +1,9 @@
+1256_kick_high_left01_poses.npz
+652_kick_low_right04_poses.npz
+667_kick_high_right04_poses.npz
+777_kick03_poses.npz
+780_kick06_poses.npz
+790_kick04_poses.npz
+819_kick_low_right05_poses.npz
+831_kick_high_right02_poses.npz
+995_kick_high_right04_poses.npz

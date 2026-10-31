@@ -1,0 +1,15 @@
+1006_downstairs04_poses.npz
+1037_downstairs05_poses.npz
+1052_upstairs08_poses.npz
+1057_upstairs_downstairs05_poses.npz
+1135_upstairs05_poses.npz
+1186_downstairs05_poses.npz
+556_downstairs06_poses.npz
+559_downstairs_backwards02_poses.npz
+679_upstairs04_poses.npz
+680_downstairs10_poses.npz
+686_upstairs_downstairs01_poses.npz
+874_upstairs01_poses.npz
+882_downstairs06_poses.npz
+955_upstairs_09_poses.npz
+961_downstairs08_poses.npz

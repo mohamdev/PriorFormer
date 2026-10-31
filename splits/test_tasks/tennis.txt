@@ -1,0 +1,7 @@
+1031_tennis_smash_left03_poses.npz
+1038_tennis_smash_right04_poses.npz
+1134_tennis_smash_right04_poses.npz
+784_tennis_smash_left04_poses.npz
+823_tennis_forehand_right03_poses.npz
+867_tennis_forehand_right01_poses.npz
+898_tennis_smash_left01_poses.npz

@@ -1,0 +1,17 @@
+1045_wipe_leg_vertical08_poses.npz
+1098_wipe_back_dabbing03_poses.npz
+1142_wipe_back_dabbing01_poses.npz
+1168_wipe_leg_vertical09_poses.npz
+1173_wipe_leg_smallcircles02_poses.npz
+1230_wipe_left_arm01_poses.npz
+497_wipe_back_vertical03_poses.npz
+529_wipe_head_smallcircles01_poses.npz
+578_wipe_arm_smallcircle02_poses.npz
+588_wipe_circular_left16_poses.npz
+654_wipe16_poses.npz
+729_wipe_circular_left15_poses.npz
+733_wipe_front01_poses.npz
+772_wipe_head_vertical03_poses.npz
+959_wipe_back_smallcircle01_poses.npz
+967_wipe_back_horizontal02_poses.npz
+970_wipe_circular_left13_poses.npz

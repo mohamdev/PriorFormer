@@ -1,0 +1,7 @@
+1119_pour04_poses.npz
+670_double_pour_and_mixing11_poses.npz
+678_pouring_the_bottle01_poses.npz
+764_pour_and_mixing_normal_speed_02_poses.npz
+808_pouring_the_bottle05_poses.npz
+947_double_pour_and_mixing01_poses.npz
+988_pour_and_mixing_different_speeds_01_poses.npz
