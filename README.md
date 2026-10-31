@@ -76,6 +76,7 @@ An audit of the code against the paper found the following. The released model a
 3. **Checkpoint mismatch.** The evaluation scripts pick the "latest" checkpoint by alphabetical order, so Table II was very likely computed with epoch 8, while epoch 12 was exported to ONNX. Both checkpoints give the same results within 0.1 mm.
 4. **In-training validation leak.** The training scripts validate on a random 5% of the 13-frame windows of the *training* clips, so `best_val` and the "36.5 mm / 39.4 mm" quoted in the paper's Discussion are training-set errors.
 5. **Description mismatches in the paper:** the split is 80/20, not 90/10; the six segments are the joint pairs above, not forearm/upper arm/bi-acromial/spine/thigh/shank; joints come from SMPL-X vertices; camera distance is relative to body size, not 1.5–3.5 m; the released versatile model was fine-tuned for 12 epochs, not 10.
+6. **Two of the six segment priors are not rigid.** The shoulder joint is a single surface vertex that moves with the shoulder girdle, so *shoulder width* and *R shoulder to R hip* vary within a clip (median range 22 mm and 33 mm, 90th percentile 92 mm and 81 mm, over 300 test clips). Forearms, thighs, shanks and hip width vary by 2–16 mm. Because the prior is measured on a single frame, these two values are noisy, which may partly explain the small effect of the segment prior.
 
 A corrected arXiv version will follow.
 
