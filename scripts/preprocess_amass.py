@@ -59,6 +59,9 @@ def pelvis_frame_joints(verts, markers):
     return joints @ R.T, R, hip_mid[0]
 
 
+CHUNK = 256  # frames per body model call
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--amass", required=True)
@@ -95,8 +98,9 @@ def main():
             if args.with_shape:
                 betas = data["betas"][:NUM_BETAS].astype(np.float32)
                 params["betas"] = torch.tensor(betas, device=device).expand(len(poses), -1)
-            with torch.no_grad():
-                verts = body_models[gender](**params).v.cpu().numpy()
+            with torch.no_grad():  # in chunks of frames, so that long Clips fit in a small GPU
+                verts = np.concatenate([body_models[gender](**{k: v[i:i + CHUNK] for k, v in params.items()})
+                                        .v.cpu().numpy() for i in range(0, len(poses), CHUNK)])
             joints, R, hip_mid = pelvis_frame_joints(verts, markers)
             np.savez(out_dir / row["processed_file"], joints_3d=joints.astype(np.float32), R=R, t=hip_mid,
                      betas=betas, gender=gender)
