@@ -31,3 +31,10 @@ def pose_segment_priors(poses):
     """Segment prior of each pose in (...,J,3) -> (...,6)."""
     a, b = zip(*SEGMENT_PAIRS)
     return (np.linalg.norm(poses[..., a, :] - poses[..., b, :], axis=-1) / SEG_NORM).astype(np.float32)
+
+
+def limb_length_spread(clips, pair):
+    """Std across Clips (each (F,J,3)) of the per-Clip median distance between the joints in `pair`."""
+    i, j = pair
+    lengths = [np.median(np.linalg.norm(c[:, i] - c[:, j], axis=-1)) for c in clips]
+    return float(np.std(lengths))

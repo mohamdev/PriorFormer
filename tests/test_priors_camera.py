@@ -55,3 +55,13 @@ def test_projection_divides_pixels_by_image_width():
     R, t = np.eye(3, dtype=np.float32), np.array([0, 0, 2], np.float32)
     uv = project(np.array([[[0.2, 0.1, 0.0]]], np.float32), K, R, t)
     np.testing.assert_allclose(uv[0, 0], [(960 + 100) / IMG_W, (540 + 50) / IMG_W], atol=1e-6)
+
+
+def test_limb_length_spread_is_the_std_of_per_clip_median_lengths():
+    from priorformer.skeleton import limb_length_spread
+
+    same = [np.stack([t_pose()] * 3), np.stack([t_pose()] * 4)]
+    assert limb_length_spread(same, (6, 8)) == 0.0
+    varied = [np.stack([t_pose()] * 3), np.stack([t_pose() * 1.1] * 4)]
+    # R thigh 0.44 m and 0.484 m: std 0.022 m
+    np.testing.assert_allclose(limb_length_spread(varied, (6, 8)), 0.022, atol=1e-6)
