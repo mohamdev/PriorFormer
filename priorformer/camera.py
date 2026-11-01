@@ -91,7 +91,8 @@ def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
 
     Image up is gravity `up` (up to a random roll); the camera is never below the lowest joint.
     The camera sits around the mid-hip (origin) and looks at it, or with `target_offset` at a
-    random point near it, in which case the points are kept inside the image.
+    random point near it, so that the mid-hip projects off-center; the points are then kept inside
+    the image (after `tries` failed draws, the camera looks at the mid-hip).
     """
     pts = points.reshape(-1, 3)
     r_body = r_body or np.linalg.norm(pts, axis=1).max()
@@ -116,9 +117,10 @@ def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
                 break
         offset = setting.target_offset if attempt < tries else 0.0
         target = np.zeros(3)
-        if offset > 0:
-            d = rng.normal(size=3)
-            target = d / (np.linalg.norm(d) + 1e-8) * rng.uniform(0, offset) * r_body
+        if offset > 0:  # shift the look-at target so that the mid-hip lands up to `offset` half-images off-center
+            R0 = look_at_R(cam_pos, target, up=-up)
+            o = rng.uniform(-offset, offset, 2) * np.array([W, H]) / 2 * dist / f
+            target = o[0] * R0[0] + o[1] * R0[1]
         R = look_at_R(cam_pos, target, up=-up)  # camera y points down the image, i.e. along -up
         if setting.roll_deg:
             R = _roll(R, rng.uniform(-setting.roll_deg, setting.roll_deg))

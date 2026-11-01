@@ -74,3 +74,22 @@ def test_a_focal_length_twice_too_long_halves_the_normalized_coordinates():
     K_true = K.copy()
     K_true[0, 0] = K_true[1, 1] = K[0, 0] / 2
     np.testing.assert_allclose(normalize_keypoints(uv, K), 0.5 * normalize_keypoints(uv, K_true), atol=1e-6)
+
+
+def test_wild_cameras_move_the_subject_off_center_but_keep_it_in_the_image():
+    from priorformer.camera import in_image
+
+    clip = np.stack([t_pose()] * 3)
+    up = np.array([0, 0, 1], np.float32)
+    offsets, sizes, focal = [], set(), []
+    for seed in range(200):
+        cam = sample_camera_v2(clip, np.random.default_rng(seed), WILD, up)
+        assert in_image(clip, cam.K, cam.R, cam.t, cam.W, cam.H)
+        hip = pixels(np.zeros((1, 3), np.float32), cam)[0]
+        offsets.append(np.abs(hip - cam.K[:2, 2]) / np.array([cam.W, cam.H]))
+        sizes.add((cam.W, cam.H))
+        focal.append(cam.K[0, 0] / np.hypot(cam.W, cam.H))
+    offsets = np.array(offsets)
+    assert np.median(offsets.max(axis=1)) > 0.05          # the root is usually well away from the principal point
+    assert len(sizes) > 100 and any(w < h for w, h in sizes) and any(w > h for w, h in sizes)  # portrait and landscape
+    assert 0.35 <= min(focal) and max(focal) <= 1.5 and max(focal) - min(focal) > 0.8

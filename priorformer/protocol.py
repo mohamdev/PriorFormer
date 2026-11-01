@@ -17,7 +17,7 @@ class CameraSetting:
     random_size: bool = False
     distance: tuple = (1.5, 2.5)
     fill: Optional[tuple] = None   # if set, distance makes the body radius fill this fraction of half the short side
-    target_offset: float = 0.0     # look-at target offset from the mid-hip, in body radii
+    target_offset: float = 0.0     # max mid-hip offset from the image center, fraction of the half image size
     roll_deg: float = 0.0
     pp_jitter: float = 0.03
 
@@ -49,8 +49,8 @@ class Protocol:
 V1 = Protocol()
 
 CENTERED = CameraSetting()
-WILD = CameraSetting(f_px=None, f_rel=(0.35, 1.5), random_size=True, fill=(0.3, 0.9),
-                     target_offset=0.5, roll_deg=10.0)
+WILD = CameraSetting(f_px=None, f_rel=(0.35, 1.5), random_size=True, fill=(0.2, 0.8),
+                     target_offset=0.6, roll_deg=10.0)
 CAMERA_SETTINGS = {"centered": CENTERED, "wild": WILD}
 
 REFERENCE = Protocol(cameras=WILD, input="normalized", target="camera", noise=NoiseSetting(), warmup=0.3)
