@@ -59,3 +59,20 @@ def test_an_interrupted_run_resumes_to_the_same_result(clips_dir, tmp_path):
     b = torch.load(tmp_path / "chunks" / "last.pt", weights_only=False)["model_state_dict"]
     for k in a:
         torch.testing.assert_close(a[k], b[k], atol=1e-4, rtol=1e-4)  # GPU kernels are not bit-deterministic
+
+
+def test_a_run_cut_mid_epoch_by_its_time_limit_resumes_to_the_same_result(clips_dir, tmp_path):
+    run(clips_dir, tmp_path / "straight", epochs=2)
+    assert (tmp_path / "straight" / "DONE").exists()
+    for _ in range(12):  # --time-limit 0 saves and stops after every step; 6 steps, 2 epoch ends, then no-ops
+        run(clips_dir, tmp_path / "cut", epochs=2, extra=["--time-limit", "0"])
+    assert (tmp_path / "cut" / "DONE").exists()
+    logs = [json.loads(line) for line in (tmp_path / "cut" / "log.jsonl").read_text().splitlines()]
+    straight = [json.loads(line) for line in (tmp_path / "straight" / "log.jsonl").read_text().splitlines()]
+    assert [log["epoch"] for log in logs] == [1, 2]
+    for a, b in zip(straight, logs):
+        assert abs(a["train_mpjpe"] - b["train_mpjpe"]) < 1e-4
+    a = torch.load(tmp_path / "straight" / "last.pt", weights_only=False)["model_state_dict"]
+    b = torch.load(tmp_path / "cut" / "last.pt", weights_only=False)["model_state_dict"]
+    for k in a:
+        torch.testing.assert_close(a[k], b[k], atol=1e-4, rtol=1e-4)

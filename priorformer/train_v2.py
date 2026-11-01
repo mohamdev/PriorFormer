@@ -10,9 +10,11 @@ warmup. The Backbone always gets all Priors; the Versatile model draws a Masking
 (MASKING_MODES_V2) per batch and, unlike v1, fine-tunes every parameter, since the flag inputs are
 new. Validation holds out whole training Clips; the Test clips are never touched.
 
-Resumable: if --out holds last.pt, training continues after its epoch (same command again after a
-timeout or cancel), and a finished run exits at once. Every epoch is seeded, so a resumed run
-matches an uninterrupted one. --epochs-per-run stops early on purpose, to fit a walltime.
+Resumable: if --out holds last.pt, training continues where it stopped (same command again after a
+timeout or cancel), and a finished run writes DONE and exits at once. Every epoch is seeded and a
+mid-epoch save keeps the batch position and RNG states, so a resumed run matches an uninterrupted
+one. --epochs-per-run and --time-limit stop early on purpose, to fit a walltime; --save-every saves
+mid-epoch in case the job is killed.
 """
 import argparse
 import json
@@ -60,6 +62,23 @@ def validate(model, loader, modes, device):
     return out
 
 
+def save_last(out, ckpt):
+    torch.save(ckpt, out / "last.tmp")
+    Path(out / "last.tmp").replace(out / "last.pt")   # atomic: a kill mid-save keeps the old last.pt
+
+
+def rng_states():
+    return {"python": random.getstate(), "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None}
+
+
+def set_rng_states(states):
+    random.setstate(states["python"])
+    torch.set_rng_state(states["torch"].cpu())   # the checkpoint may have been loaded onto the GPU
+    if states["cuda"] is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([s.cpu() for s in states["cuda"]])
+
+
 def git_commit():
     try:
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
@@ -83,6 +102,8 @@ def main(argv=None):
     p.add_argument("--max-clips", type=int, help="use only the first N training clips (local checks)")
     p.add_argument("--max-steps", type=int, help="stop each epoch after N batches (local checks)")
     p.add_argument("--epochs-per-run", type=int, help="stop after N epochs in this run (resume later)")
+    p.add_argument("--time-limit", type=float, help="minutes: save and stop mid-epoch after this (resume later)")
+    p.add_argument("--save-every", type=float, help="minutes between mid-epoch saves of last.pt")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--amp", action="store_true")
@@ -119,34 +140,45 @@ def main(argv=None):
     config = {**vars(args), "kind": "reference", "window": WINDOW, "protocol": repr(protocol),
               "train_clips": len(train_names), "val_clips": len(val_names), "commit": git_commit()}
 
-    start, best = 1, float("inf")
+    start, best, partial = 1, float("inf"), None
     if (out / "last.pt").exists():
         ckpt = torch.load(out / "last.pt", map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         opt.load_state_dict(ckpt["optimizer"])
         sched.load_state_dict(ckpt["scheduler"])
         scaler.load_state_dict(ckpt["scaler"])
-        start, best = ckpt["epoch"] + 1, ckpt["best"]
-        print(f"resuming after epoch {ckpt['epoch']}")
+        start, best, partial = ckpt["epoch"] + 1, ckpt["best"], ckpt.get("partial")
+        print(f"resuming after epoch {ckpt['epoch']}" + (f", step {partial['step']}" if partial else ""))
     elif args.init:
         model.load_state_dict(load_reference(args.init, device).state_dict())
     if start > args.epochs:
         print("already finished")
+        (out / "DONE").touch()
         return
 
+    run_start = last_save = time.time()
     last = args.epochs if not args.epochs_per_run else min(args.epochs, start + args.epochs_per_run - 1)
     for epoch in range(start, last + 1):
+        if args.time_limit is not None and epoch > start and time.time() - run_start > 60 * args.time_limit:
+            print(f"time limit: stopping before epoch {epoch}")
+            return
         random.seed(args.seed * 1000 + epoch)
         torch.manual_seed(args.seed * 1000 + epoch)
+        skip, step_log = 0, []
+        if partial and partial["epoch"] == epoch:
+            skip, step_log = partial["step"], partial["step_log"]
+            set_rng_states(partial["rng"])
         model.train()
         train_ds.set_epoch(epoch)
-        loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers,
-                            pin_memory=True, drop_last=True,
-                            generator=torch.Generator().manual_seed(args.seed * 1000 + epoch))
-        t0, step_log = time.time(), []
-        pbar = tqdm(loader, desc=f"epoch {epoch}", mininterval=30, total=args.max_steps or len(loader))
-        for step, batch in enumerate(pbar):
-            if args.max_steps and step >= args.max_steps:
+        gen = torch.Generator().manual_seed(args.seed * 1000 + epoch)   # also seeds the workers, not the global RNG
+        order = torch.randperm(len(train_ds), generator=gen)
+        loader = DataLoader(train_ds, batch_size=args.batch, sampler=order[skip * args.batch:].tolist(),
+                            num_workers=args.workers, pin_memory=True, drop_last=True, generator=gen)
+        t0 = time.time()
+        steps = min(args.max_steps, len(order) // args.batch) if args.max_steps else len(order) // args.batch
+        pbar = tqdm(loader, desc=f"epoch {epoch}", mininterval=30, initial=skip, total=steps)
+        for step, batch in enumerate(pbar, start=skip):
+            if step >= steps:
                 break
             batch = to_device(batch, device)
             mode = random.choice(modes)
@@ -158,6 +190,18 @@ def main(argv=None):
             scaler.update()
             step_log.append({"step": step, "mode": mode, "loss": loss.item(), **metrics})
             pbar.set_postfix(mpjpe=f"{metrics['mpjpe']:.4f}", refresh=False)
+
+            stop = args.time_limit is not None and time.time() - run_start > 60 * args.time_limit
+            if stop or (args.save_every and time.time() - last_save > 60 * args.save_every):
+                save_last(out, {"epoch": epoch - 1, "model_state_dict": model.state_dict(), "config": config,
+                                "optimizer": opt.state_dict(), "scheduler": sched.state_dict(),
+                                "scaler": scaler.state_dict(), "best": best,
+                                "partial": {"epoch": epoch, "step": step + 1, "step_log": step_log,
+                                            "rng": rng_states()}})
+                last_save = time.time()
+                if stop:
+                    print(f"time limit: saved epoch {epoch} at step {step + 1}")
+                    return
         sched.step()
 
         val = validate(model, val_loader, modes, device)
@@ -174,10 +218,12 @@ def main(argv=None):
         ckpt = {"epoch": epoch, "model_state_dict": model.state_dict(), "val_mpjpe": val, "config": config,
                 "optimizer": opt.state_dict(), "scheduler": sched.state_dict(), "scaler": scaler.state_dict(),
                 "best": best}
-        torch.save(ckpt, out / "last.tmp")
-        Path(out / "last.tmp").replace(out / "last.pt")   # atomic: a kill mid-save keeps the old last.pt
+        save_last(out, ckpt)
+        last_save = time.time()
         if best_now:
             torch.save(ckpt, out / "best.pt")
+    if last == args.epochs:
+        (out / "DONE").touch()
 
 
 if __name__ == "__main__":
