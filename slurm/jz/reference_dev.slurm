@@ -39,23 +39,26 @@ TRAIN="python -u -m priorformer.train_v2 --data $DATA/train --workers $(( SLURM_
        --time-limit 100 --save-every 10 ${TRAIN_ARGS:-}"
 
 cd "$REPO"
-echo "=== job ${SLURM_JOB_ID:-local} | commit $(git rev-parse --short HEAD) ==="
+# compute nodes have no git: read the commit from .git
+HEAD_REF=$(sed -n 's/^ref: //p' .git/HEAD)
+COMMIT=$(cat ".git/$HEAD_REF" 2>/dev/null || grep " $HEAD_REF$" .git/packed-refs | cut -d" " -f1)
+echo "=== job ${SLURM_JOB_ID:-local} | commit ${COMMIT:0:7} ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 if [ ! -f "$BACKBONE/DONE" ]; then
     echo "--- backbone"
-    srun $TRAIN --model backbone --out "$BACKBONE"
+    srun --unbuffered $TRAIN --model backbone --out "$BACKBONE"
 elif [ ! -f "$VERSATILE/DONE" ]; then
     echo "--- versatile"
-    srun $TRAIN --model versatile --init "$BACKBONE/best.pt" --out "$VERSATILE"
+    srun --unbuffered $TRAIN --model versatile --init "$BACKBONE/best.pt" --out "$VERSATILE"
 else
     for SETTING in centered wild; do
         [ -f "$EVAL/$SETTING.json" ] && continue
         echo "--- evaluate $SETTING"
         mkdir -p "$EVAL"
-        srun python -u -m priorformer.evaluate_v2 --checkpoint "$VERSATILE/best.pt" --clips "$DATA/test" \
+        srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$VERSATILE/best.pt" --clips "$DATA/test" \
             --cameras 10 --settings $SETTING --out "$EVAL/$SETTING.json" ${EVAL_ARGS:-}
-        srun python -m priorformer.benchmark --checkpoint "$VERSATILE/best.pt" --reference > "$EVAL/benchmark_$SETTING.txt"
+        srun --unbuffered python -m priorformer.benchmark --checkpoint "$VERSATILE/best.pt" --reference > "$EVAL/benchmark_$SETTING.txt"
         exit 0
     done
     echo "--- all done: $EVAL"

@@ -83,8 +83,15 @@ def git_commit():
     try:
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                               cwd=Path(__file__).parent).stdout.strip()
-    except OSError:
-        return "unknown"
+    except OSError:  # no git (cluster compute nodes): read the checked-out ref
+        git = Path(__file__).resolve().parents[1] / ".git"
+        try:
+            ref = (git / "HEAD").read_text().strip().removeprefix("ref: ")
+            if (git / ref).exists():
+                return (git / ref).read_text().strip()[:7]
+            return next(line[:7] for line in (git / "packed-refs").read_text().splitlines() if line.endswith(" " + ref))
+        except (OSError, StopIteration):
+            return "unknown"
 
 
 def main(argv=None):
