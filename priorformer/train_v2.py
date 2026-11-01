@@ -46,7 +46,7 @@ def to_device(batch, device):
 
 @torch.no_grad()
 def validate(model, loader, modes, device):
-    """Mean MPJPE (m) over the real frames of the validation Windows, per Masking mode."""
+    """Mean MPJPE (m) over the real frames of every Window of the Validation clips, per Masking mode."""
     model.eval()
     out = {}
     for mode in modes:

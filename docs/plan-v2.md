@@ -33,7 +33,7 @@ End goal: live monocular 3D human pose on phones. A COCO-17 2D detector feeds Pr
 
 **Losses (v2).** Geodesic rotation loss, plus MPJPE after SOMA forward kinematics in PyTorch, plus optional 2D reprojection in normalized coordinates. If SOMA's forward kinematics isn't differentiable in PyTorch, write a small one for the ~22 joints.
 
-**Cameras.** Up = gravity (AMASS world z, or the BONES-SEED vertical), random roll ±10°, f ~ U(500, 2500) px, principal point jitter ±3%, look-at target offset from the body, random image size (640×480 to 3840×2160).
+**Cameras.** Up = gravity (AMASS world z, or the BONES-SEED vertical). Two Camera settings: centered (v1 ranges, upright) and wild: roll ±10°, f = U(0.35, 1.5) × image diagonal (resolution-independent; about 500–2500 px at 1080p–4K), principal point jitter ±3%, mid-hip up to 60% of the half image off-center with the body kept in view, random image size (long side 640–3840, 4:3 or 16:9, portrait or landscape).
 
 **2D noise.** Per-keypoint Gaussian jitter, occasional large errors (left/right swaps, jumps), random missing keypoints with a visibility input. Later, tune the noise to the chosen detector's real errors.
 
@@ -51,7 +51,7 @@ Synthetic COCO-17: fixed SOMA mesh vertices for each keypoint, plus 2D noise.
 
 ## Evaluation protocol v2
 
-Per Clip, at least 10 cameras, seeded by (seed, Clip index, camera index), in two settings: **centered** (v1 ranges, upright) and **wild** (the wide ranges above). Headline metric: newest-frame MPJPE, root-relative, camera frame. Also report all-frame MPJPE (for v1 continuity), N-MPJPE, PA-MPJPE, bone-length error, per-joint MPJPE, warmup error for 1–12 frames of history, and rotation error for v2. Masking modes: full priors, camera estimated, segments masked, no priors, segments partial. Report mean ± std over Clips, the mean of Task means, the parameter count and `benchmark.py` latency.
+Per Clip, at least 10 cameras, seeded by (seed, Camera setting, Clip index, camera index), in two settings: **centered** (v1 ranges, upright) and **wild** (the wide ranges above). Headline metric: newest-frame MPJPE, root-relative, camera frame. Also report all-frame MPJPE (for v1 continuity), N-MPJPE, PA-MPJPE, bone-length error, per-joint MPJPE, warmup error for 1–12 frames of history, and rotation error for v2. Masking modes: full priors, camera estimated, segments masked, no priors; segments partial arrives with the per-bone Segment prior mask of the rotation model (M2). Report mean ± std over Clips, the mean of Task means, the parameter count and `benchmark.py` latency.
 
 ## Milestones (one branch / PR each, with tests and a results .json + .md)
 

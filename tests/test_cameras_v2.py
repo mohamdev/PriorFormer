@@ -54,18 +54,18 @@ def test_cameras_are_seeded_and_never_below_the_lowest_joint():
         assert cam_pos @ up >= (clip.reshape(-1, 3) @ up).min() - 1e-6
 
 
-def test_normalized_keypoints_are_x_over_z_and_y_over_z():
-    from priorformer.camera import normalize_keypoints
+def test_normalized_pixels_are_x_over_z_and_y_over_z():
+    from priorformer.camera import normalize_pixels
 
     cam_points = np.array([[0.3, -0.2, 2.0], [-0.5, 0.4, 4.0]], np.float32)
     K = np.array([[900, 0, 700], [0, 900, 500], [0, 0, 1]], np.float32)
     uvw = cam_points @ K.T
     uv = uvw[:, :2] / uvw[:, 2:]
-    np.testing.assert_allclose(normalize_keypoints(uv, K), cam_points[:, :2] / cam_points[:, 2:], atol=1e-6)
+    np.testing.assert_allclose(normalize_pixels(uv, K), cam_points[:, :2] / cam_points[:, 2:], atol=1e-6)
 
 
 def test_a_focal_length_twice_too_long_halves_the_normalized_coordinates():
-    from priorformer.camera import default_intrinsics, normalize_keypoints
+    from priorformer.camera import default_intrinsics, normalize_pixels
 
     K = default_intrinsics(1920, 1080)
     np.testing.assert_allclose(K[0, 0], np.hypot(1920, 1080))
@@ -73,7 +73,7 @@ def test_a_focal_length_twice_too_long_halves_the_normalized_coordinates():
     uv = np.array([[1200.0, 300.0], [100.0, 900.0]], np.float32)
     K_true = K.copy()
     K_true[0, 0] = K_true[1, 1] = K[0, 0] / 2
-    np.testing.assert_allclose(normalize_keypoints(uv, K), 0.5 * normalize_keypoints(uv, K_true), atol=1e-6)
+    np.testing.assert_allclose(normalize_pixels(uv, K), 0.5 * normalize_pixels(uv, K_true), atol=1e-6)
 
 
 def test_wild_cameras_move_the_subject_off_center_but_keep_it_in_the_image():

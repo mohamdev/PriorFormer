@@ -1,4 +1,4 @@
-"""Detector-like 2D noise (protocol.NoiseSetting) on pixel keypoints."""
+"""Detector-like 2D noise (protocol.NoiseSetting) on the pixel positions of the Joint set."""
 import numpy as np
 
 from priorformer.skeleton import JOINT_NAMES
@@ -9,7 +9,7 @@ LEFT_RIGHT = [(JOINT_NAMES.index(f"r_{j}"), JOINT_NAMES.index(f"l_{j}"))
 
 
 def add_noise(uv, setting, rng):
-    """Noisy copy of pixel keypoints (T,J,2) and their visibility (T,J).
+    """Noisy copy of pixel joint positions (T,J,2) and their visibility (T,J).
 
     One jitter std per call, drawn from U(0, sigma) times the 2D body size (bounding-box diagonal);
     then outliers, left/right swaps of whole frames, and missing joints (zeroed, visibility 0).

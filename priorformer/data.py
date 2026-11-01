@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from priorformer.camera import (default_intrinsics, normalize_intrinsics, normalize_keypoints, pixel_projection,
+from priorformer.camera import (default_intrinsics, normalize_intrinsics, normalize_pixels, pixel_projection,
                                project, sample_camera, sample_camera_v2)
 from priorformer.noise import add_noise
 from priorformer.skeleton import JOINT_NAMES, segment_prior
@@ -127,6 +127,7 @@ def protocol_item(clip, y3d, up, r_body, protocol, rng):
     if protocol.warmup and rng.random() < protocol.warmup:
         hidden = len(y3d) - int(rng.integers(1, len(y3d)))   # keep 1 .. T-1 newest frames
         item = hide_oldest_frames(item, hidden)
+        item["seg"] = segment_prior(y3d[hidden])            # measured on the first real frame
     return {k: torch.from_numpy(v) for k, v in item.items()}
 
 
@@ -159,9 +160,9 @@ def observe(joints, cam, protocol, rng):
     if protocol.noise is not None:
         uv_obs, vis = add_noise(uv, protocol.noise, rng)
     return {
-        "x2d": normalize_keypoints(uv_obs, cam.K) * vis[..., None],
-        "x2d_est": normalize_keypoints(uv_obs, default_intrinsics(cam.W, cam.H)) * vis[..., None],
-        "x2d_clean": normalize_keypoints(uv, cam.K),
+        "x2d": normalize_pixels(uv_obs, cam.K) * vis[..., None],
+        "x2d_est": normalize_pixels(uv_obs, default_intrinsics(cam.W, cam.H)) * vis[..., None],
+        "x2d_clean": normalize_pixels(uv, cam.K),
         "vis": vis,
         "frame_mask": np.ones(len(joints), np.float32),
         "y3d": (cam_pts - root[:, None]).astype(np.float32),

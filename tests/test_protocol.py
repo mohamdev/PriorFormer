@@ -91,3 +91,15 @@ def test_warmup_hides_only_the_oldest_frames_of_some_windows():
     assert (masks[:, 1:] >= masks[:, :-1]).all()
     item = next(ds[i] for i in range(len(ds)) if ds[i]["frame_mask"][0] == 0)
     assert (item["x2d"][item["frame_mask"] == 0] == 0).all() and (item["vis"][item["frame_mask"] == 0] == 0).all()
+
+
+def test_warmup_measures_the_segment_prior_on_the_first_real_frame():
+    from priorformer.protocol import REFERENCE
+    from priorformer.skeleton import segment_prior
+
+    clip = moving_clip(200, 3) * np.linspace(1.0, 1.5, 200)[:, None, None].astype(np.float32)  # lengths change
+    ds = ProtocolWindowDataset([Clip(clip)], REFERENCE)
+    idx = next(i for i in range(len(ds)) if ds[i]["frame_mask"][0] == 0)
+    item = ds[idx]
+    first_real = int((item["frame_mask"] == 0).sum())
+    np.testing.assert_allclose(item["seg"].numpy(), segment_prior(clip[idx + first_real]), atol=1e-6)

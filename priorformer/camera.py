@@ -92,7 +92,8 @@ def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
     Image up is gravity `up` (up to a random roll); the camera is never below the lowest joint.
     The camera sits around the mid-hip (origin) and looks at it, or with `target_offset` at a
     random point near it, so that the mid-hip projects off-center; the points are then kept inside
-    the image (after `tries` failed draws, the camera looks at the mid-hip).
+    the image (after `tries` failed draws, the camera looks at the mid-hip). Without an offset,
+    like v1, the body is not forced inside the image.
     """
     pts = points.reshape(-1, 3)
     r_body = r_body or np.linalg.norm(pts, axis=1).max()
@@ -108,13 +109,15 @@ def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
             dist = max(r_body * f / (rng.uniform(*setting.fill) * min(W, H) / 2), 1.2 * r_body)
         else:
             dist = r_body * rng.uniform(*setting.distance)
-        while True:
+        for _ in range(10000):
             v = rng.normal(size=3)
             v /= np.linalg.norm(v) + 1e-8
             cam_pos = v * dist
             height = cam_pos @ up
             if height >= min_height and np.linalg.norm(cam_pos - height * up) >= r_body * DIST_MIN / 2:
                 break
+        else:
+            raise RuntimeError("no camera position above the lowest joint: check the gravity direction")
         offset = setting.target_offset if attempt < tries else 0.0
         target = np.zeros(3)
         if offset > 0:  # shift the look-at target so that the mid-hip lands up to `offset` half-images off-center
@@ -139,8 +142,8 @@ def pixel_projection(points, K, R, t):
     return (uvw[..., :2] / uvw[..., 2:]).astype(np.float32)
 
 
-def normalize_keypoints(uv, K):
-    """Normalized camera coordinates ((u - cx)/fx, (v - cy)/fy) of pixel keypoints (...,2): X/Z, Y/Z."""
+def normalize_pixels(uv, K):
+    """Normalized camera coordinates ((u - cx)/fx, (v - cy)/fy) of pixel positions (...,2): X/Z, Y/Z."""
     return ((uv - K[:2, 2]) / np.array([K[0, 0], K[1, 1]], np.float32)).astype(np.float32)
 
 

@@ -44,7 +44,8 @@ case "$STAGE" in
         [ -e "$CHECKPOINT" ] || { echo "no checkpoint at $CHECKPOINT (set CHECKPOINT)"; exit 1; }
         RESULTS=$(dirname "$CHECKPOINT")/eval_v2
         # task 0: centered cameras, task 1: wild cameras (expanded in the job)
-        EXEC="python3 -u -m priorformer.evaluate_v2 --checkpoint $CHECKPOINT --clips $DATA/test --cameras 10 --settings \$SETTING --out $RESULTS/\$SETTING.json && python3 -m priorformer.benchmark --checkpoint $CHECKPOINT --reference > $RESULTS/benchmark_\$SETTING.txt"
+        # a finished setting (its .json exists) is skipped when the array is resubmitted
+        EXEC="[ -e $RESULTS/\$SETTING.json ] || python3 -u -m priorformer.evaluate_v2 --checkpoint $CHECKPOINT --clips $DATA/test --cameras 10 --settings \$SETTING --out $RESULTS/\$SETTING.json && python3 -m priorformer.benchmark --checkpoint $CHECKPOINT --reference > $RESULTS/benchmark_\$SETTING.txt"
         ARRAY="#"
         LOGID=%A_%a
         TIME=1-00:00:00 ;;
