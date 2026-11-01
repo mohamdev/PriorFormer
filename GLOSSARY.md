@@ -46,7 +46,7 @@ Six distances between pairs of joints in the Joint set, measured on the first fr
 _Avoid_: bone lengths, anatomical lengths, segment lengths (when meaning the CSV-pipeline values)
 
 **Masking mode**:
-Which Priors are zeroed at inference or training: full priors, camera masked, segments masked, or no priors.
+Which Priors are withheld at inference or training: full priors, camera masked, segments masked, or no priors. With camera-normalized 2D input, "camera estimated" replaces "camera masked": the intrinsics are guessed from the image size instead of zeroed.
 _Avoid_: ablation setting
 
 ## Bodies
@@ -78,3 +78,7 @@ _Avoid_: validation windows
 **Task**:
 A named motion category (e.g. walk, kick, wipe) used to group evaluation clips for per-task MPJPE.
 _Avoid_: activity, action
+
+**Camera setting**:
+The family of synthetic upright cameras a Clip is seen through: centered (the paper's focal lengths and distances, subject at the image center) or wild (wide focal range, subject off-center, any image size and orientation, small roll).
+_Avoid_: camera regime, camera mode
