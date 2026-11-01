@@ -8,3 +8,4 @@ __pycache__/
 
 # Private cluster notes (not for the public repo)
 /docs/pfcalcul-howto-for-priorformer.md
+/slurm/laas/site.env
