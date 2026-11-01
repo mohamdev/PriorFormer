@@ -6,7 +6,7 @@ Official implementation of the paper
 
 PriorFormer is a small Transformer (0.53M parameters) that lifts a 13-frame window of 12 2D joint positions from one camera to 3D. It optionally takes two **priors**, the camera intrinsics and six segment lengths, and was trained with random prior masking so that it keeps working when either prior is missing.
 
-> **Please read [Corrections](#corrections-october-2026)** before comparing with the paper: the headline accuracy and the average effect of the priors reproduce, but Table II's per-task numbers are noisy and several details are misdescribed.
+> **Please read [Corrections](#corrections-october-2026)** before comparing with the paper: the headline accuracy and the average effect of the priors reproduce, but Table II's per-task numbers are noisy, the versatile model does not beat the expert, and several details are misdescribed.
 
 ## Install
 
@@ -22,9 +22,10 @@ Download the checkpoints from the [`v1.0-checkpoints` release](https://github.co
 | `best_lifter_versatile_128_ddp_epoch12.pt` | **Versatile model**, the released model (same weights as `model.onnx`) | `7693508775243d3dcbdd37657102fa913e9f83bcd3303c7c99f40de2f0fcb514` |
 | `best_lifter_versatile_128_ddp_epoch8.pt` | Versatile model, epoch 8 of the same run; very likely the one behind the paper's Table II | `f6a497f23a07f1243b46a72d79533f200b3b8a6b4c55556460e95e44bb0bf294` |
 | `best_lifter_128_ddp_epoch50.pt` | **Backbone**: 50 epochs with all priors; starting point of the fine-tuned models | `58c3c295c935a0b00c6c61abea9889ad56fc9631e2a280fd62380e685649e851` |
+| `best_lifter_expert_retrained_epoch1.pt` | **Expert model**, retrained in 2026 (the original was lost): backbone fine-tuned with all priors, best epoch on whole validation clips | `4e178888442403a0064afd2d8bcf2b08d25ce11949a910e513e11f3c13f08625` |
 | `model.onnx` | ONNX export of the versatile model; inputs `x2d` (1,13,12,2), `k` (1,3), `seg` (1,6) | `f50519eecd13e6a2dc750fa64eb5ecd9fab02ceda4b1141ac47fe2f33ab7a8a2` |
 
-The original Expert model (Table I) was lost; a reproduction is being trained (see [Results](#results)).
+The original Expert model (Table I) was lost; the retrained one reproduces it (see [Results](#results)).
 
 ## Use
 
@@ -109,7 +110,16 @@ MPJPE (mm) on the **test clips**, 10 cameras per clip ([`results/`](results) has
 
 The paper's Table II averages were 36.4 / 38.7 / 39.2 / 41.2 mm. Paired over the 800 test clips, masking the camera prior adds 1.1 mm (95% bootstrap CI 1.0–1.2), masking the segment prior 4.1 mm (3.8–4.5) and masking both 5.3 mm (5.0–5.8); full priors beat no priors on 97% of clips. Excluding the 44 test clips that duplicate or nearly duplicate a training clip (Corrections 8) changes the task average by at most 0.1 mm. The priors help consistently but modestly, and the model stays accurate without them.
 
-**Expert model** (Table I): the reproduction is being retrained with whole-clip validation; results will be added here.
+**Expert model and backbone** (Table I), average of task means (full tables in [`results/`](results)):
+
+| Model | full priors | camera masked | segments masked | no priors |
+|---|---|---|---|---|
+| Paper, Table I (original expert) | 39.6 | 209.5 | 420.1 | 419.0 |
+| Expert, retrained (`best_lifter_expert_retrained_epoch1.pt`) | 33.0 ± 9.5 | 208.9 ± 21.4 | 429.5 ± 20.4 | 425.4 ± 21.0 |
+| Backbone (`best_lifter_128_ddp_epoch50.pt`) | 32.4 ± 9.4 | 210.1 ± 21.4 | 420.6 ± 23.1 | 419.5 ± 22.5 |
+| Versatile (`best_lifter_versatile_128_ddp_epoch12.pt`) | 34.6 ± 9.4 | 36.1 ± 9.5 | 38.5 ± 10.2 | 40.0 ± 10.3 |
+
+Models never trained with masking collapse when a prior is zeroed, as in the paper. With all priors, they are slightly *more* accurate than the versatile model: paired over the 800 test clips, the versatile model is 1.5 mm worse than the expert (95% CI 1.2–1.7, worse on 84% of clips) and 2.2 mm worse than the backbone (2.0–2.5). Fine-tuning the backbone into the expert brings nothing: validation error was lowest after the first epoch, so the expert is the backbone after one more epoch at lr 1e-4.
 
 ## Corrections (October 2026)
 
@@ -123,6 +133,7 @@ An audit of the code against the paper found the following. The released model, 
 6. **Two segment priors are not rigid.** The shoulder joint is a single surface vertex that moves with the shoulder girdle, so *shoulder width* and *R shoulder–R hip* vary within a clip (median range 22 and 33 mm, 90th percentile 92 and 81 mm, over 300 test clips), against 2–16 mm for the limb segments.
 7. **All bodies have a template shape.** Preprocessing did not apply the AMASS shape coefficients (betas), so every subject has the SMPL-X template body of their gender: limb lengths take essentially two values (e.g. R forearm 242 or 267 mm). The data therefore has many subjects' motions but only two body shapes, and the segment prior carries little more than the template's gender. The segment prior's benefit may therefore come largely from telling the two templates apart, and generalization to other body proportions is untested.
 8. **Duplicates across the split.** AMASS contains duplicate recordings, and the random split put some of them on both sides: 8 test clips are exact copies of a training clip under another name, and 36 more are within 30 mm (mean joint distance) of a same-length training clip, mostly with the same motion name (likely duplicate trials). They are listed in [`splits/test_clips_near_train.tsv`](splits/test_clips_near_train.tsv); excluding them changes the results by less than 1 mm.
+9. **The versatile model does not outperform the expert.** The paper reports that the versatile model is slightly better than the expert with all priors (36.4 vs 39.6 mm) and that the expert overfits. With 10 cameras, the expert (retrained) is 1.5 mm better than the versatile model and the backbone 2.2 mm better: robustness to missing priors costs about 2 mm when all priors are given. The original expert's 39.6 mm cannot be re-checked because its checkpoint was lost.
 
 A corrected arXiv version will follow.
 
