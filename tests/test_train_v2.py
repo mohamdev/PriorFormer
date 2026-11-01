@@ -84,3 +84,44 @@ def test_the_versatile_model_trains_from_scratch_without_a_backbone(clips_dir, t
     assert ckpt["config"]["init"] is None and ckpt["config"]["lr"] == 1e-3
     assert set(ckpt["val_mpjpe"]) == {"full_priors", "camera_estimated", "segments_masked", "no_priors"}
     assert (tmp_path / "scratch" / "DONE").exists()
+
+
+GEN2 = ["--lr", "3e-4", "--schedule", "onecycle", "--ema", "0.9", "--seg-jitter", "0.2", "0.05"]
+
+
+def test_a_generation_2_run_cut_mid_epoch_resumes_to_the_same_weights_and_ema(clips_dir, tmp_path):
+    run(clips_dir, tmp_path / "straight", "versatile", 2, GEN2)
+    for _ in range(12):
+        run(clips_dir, tmp_path / "cut", "versatile", 2, [*GEN2, "--time-limit", "0"])
+    assert (tmp_path / "cut" / "DONE").exists()
+    a = torch.load(tmp_path / "straight" / "last.pt", weights_only=False)
+    b = torch.load(tmp_path / "cut" / "last.pt", weights_only=False)
+    for key in ["model_state_dict", "ema_state_dict"]:
+        for k in a[key]:
+            torch.testing.assert_close(a[key][k], b[key][k], atol=1e-4, rtol=1e-4)
+    best = torch.load(tmp_path / "straight" / "best.pt", weights_only=False)
+    ema_of_best_epoch = torch.load(tmp_path / "straight" / "best.pt", weights_only=False)["ema_state_dict"]
+    for k in best["model_state_dict"]:
+        torch.testing.assert_close(best["model_state_dict"][k], ema_of_best_epoch[k])
+    log = json.loads((tmp_path / "straight" / "log.jsonl").read_text().splitlines()[-1])
+    assert "val_mpjpe_raw" in log
+
+
+def test_the_onecycle_schedule_warms_up_to_the_peak_then_decays(clips_dir, tmp_path):
+    run(clips_dir, tmp_path / "lr", "versatile", 20, ["--lr", "3e-4", "--schedule", "onecycle"])
+    ckpt = torch.load(tmp_path / "lr" / "last.pt", weights_only=False)
+    group = ckpt["optimizer"]["param_groups"][0]
+    assert ckpt["scheduler"]["total_steps"] == 20 * 3 and group["max_lr"] == 3e-4
+    assert group["initial_lr"] == 3e-4 / 25          # warmup starts 25x below the peak
+    assert ckpt["scheduler"]["_last_lr"][0] < 3e-4 / 1000   # annealed to ~0 at the end
+
+
+def test_segment_prior_jitter_leaves_half_the_windows_exact_and_stays_in_bounds():
+    torch.manual_seed(0)
+    seg = torch.ones(4000, 6)
+    out = train_v2.jitter_segments(seg, 0.2, 0.05)
+    exact = (out == 1).all(dim=1)
+    assert 0.45 < exact.float().mean() < 0.55
+    ratio = out[~exact]
+    assert ratio.min() >= 0.8 * 0.95 - 1e-6 and ratio.max() <= 1.2 * 1.05 + 1e-6
+    assert ratio.max() > 1.15 and ratio.min() < 0.85          # the range is used on both sides

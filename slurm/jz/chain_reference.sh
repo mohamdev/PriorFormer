@@ -11,7 +11,7 @@ ACCOUNT=${1:?usage: chain_reference.sh <account> [staged|scratch]}
 VARIANT=${2:-staged}
 RUNS=${RUNS:-$SCRATCH/priorformer/runs}
 case $VARIANT in
-    staged) NAME=pf_reference; FINAL=$RUNS/reference_versatile ;;
+    staged) NAME=pf_reference; FINAL=$RUNS/reference_backbone ;;      # evaluated last
     scratch) NAME=pf_scratch; FINAL=$RUNS/reference_versatile_scratch ;;
     *) echo "unknown variant $VARIANT"; exit 1 ;;
 esac

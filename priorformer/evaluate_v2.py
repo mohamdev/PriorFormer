@@ -13,6 +13,11 @@ are in Sliding window warmup. Metrics (root-relative, camera frame): newest-fram
 N-MPJPE, PA-MPJPE and bone-length error on frames with a full Window; MPJPE per joint; MPJPE by
 frames of history (warmup); and all-frame MPJPE, overlapping full Windows averaged as in v1.
 Errors are averaged over frames, then cameras, then Clips; the Task average is the mean of Task means.
+
+--sweep-clips N adds the prior perturbation sweep on N evenly spaced Test clips: with full priors,
+the Segment prior is scaled by (1 + eps), or the focal length used to normalize the 2D input is
+(1 + eps) times the true one, on the same cameras and noise for every eps. It reports newest-frame
+MPJPE per eps and, on each side, the least-squares slope (mm per unit eps) of the increase over eps = 0.
 """
 import argparse
 import json
@@ -34,6 +39,7 @@ from priorformer.splits import read_split, task_clips
 
 REPO = Path(__file__).resolve().parents[1]
 SCALAR_METRICS = ["mpjpe", "n_mpjpe", "pa_mpjpe", "bone_error", "mpjpe_all_frames"]
+SWEEP_EPS = [-0.5, -0.3, -0.2, -0.1, -0.05, 0.0, 0.05, 0.1, 0.2, 0.3, 0.5]
 
 
 def newest_frame_windows(n_frames, window=WINDOW):
@@ -43,17 +49,20 @@ def newest_frame_windows(n_frames, window=WINDOW):
 
 
 @torch.no_grad()
-def predict_windows(model, obs, joints, mode, window=WINDOW, batch=2048):
-    """Predictions (F,T,J,3) of the Window ending at each frame of an observed Clip."""
+def predict_windows(model, obs, joints, mode, window=WINDOW, batch=2048, seg_scale=1.0, focal_scale=1.0):
+    """Predictions (F,T,J,3) of the Window ending at each frame of an observed Clip.
+
+    seg_scale scales the Segment prior; focal_scale normalizes the 2D input with that multiple of the
+    true focal length (perturbation sweep)."""
     device = next(model.parameters()).device
     idx, mask = newest_frame_windows(len(joints), window)
-    seg = pose_segment_priors(joints[idx[:, 0]])
+    seg = pose_segment_priors(joints[idx[:, 0]]) * seg_scale
     preds = []
     for i in range(0, len(idx), batch):
         sl = slice(i, i + batch)
         m = torch.from_numpy(mask[sl]).to(device)
         b = {k: torch.from_numpy(obs[k][idx[sl]]).to(device) for k in ["x2d", "x2d_est", "vis"]}
-        b["x2d"] = b["x2d"] * m[:, :, None, None]
+        b["x2d"] = b["x2d"] * m[:, :, None, None] / focal_scale
         b["x2d_est"] = b["x2d_est"] * m[:, :, None, None]
         b.update(frame_mask=m, seg=torch.from_numpy(seg[sl]).to(device))
         preds.append(model(*model_inputs(b, mode)).cpu().numpy())
@@ -98,6 +107,50 @@ def evaluate_clips_v2(model, clips, protocol, n_cameras, seed, modes, clip_index
             for metric in per_cam[mode][0]:
                 out[mode].setdefault(metric, {})[name] = np.array([m[metric] for m in per_cam[mode]])
     return out
+
+
+def side_slopes(eps, err_mm):
+    """Least-squares slopes (mm per unit eps) of err(eps) - err(0) for eps > 0 and eps < 0."""
+    eps, d = np.asarray(eps), np.asarray(err_mm) - err_mm[list(eps).index(0.0)]
+    pos, neg = eps > 0, eps < 0
+    return {"positive": float((eps[pos] * d[pos]).sum() / (eps[pos] ** 2).sum()),
+            "negative": float((eps[neg] * d[neg]).sum() / (eps[neg] ** 2).sum())}
+
+
+def prior_sweep(model, clips, protocol, n_cameras, seed, clip_index, setting_index, eps=SWEEP_EPS):
+    """Newest-frame MPJPE (mm, full priors) per eps for a scaled Segment prior and a scaled focal length."""
+    errs = {"segments": [[] for _ in eps], "focal": [[] for _ in eps]}
+    for name, clip in tqdm(clips.items(), desc="sweep", mininterval=10):
+        if len(clip.joints) < WINDOW:
+            continue
+        for cam_i in range(n_cameras):
+            rng = np.random.default_rng([seed, setting_index, clip_index[name], cam_i])
+            obs = observe(clip.joints, sample_camera_v2(clip.joints, rng, protocol.cameras, clip.up), protocol, rng)
+            for i, e in enumerate(eps):
+                for channel, kw in [("segments", {"seg_scale": 1 + e}), ("focal", {"focal_scale": 1 + e})]:
+                    pred = predict_windows(model, obs, clip.joints, "full_priors", **kw)[WINDOW - 1:, -1]
+                    errs[channel][i].append(mpjpe(pred, obs["y3d"][WINDOW - 1:]).mean())
+    out = {"eps": list(eps), "clips": len(clips), "cameras": n_cameras}
+    for channel, per_eps in errs.items():
+        mm = [round(1000 * float(np.mean(e)), 2) for e in per_eps]
+        out[channel] = {"mpjpe_mm": mm, "slope_mm_per_eps": side_slopes(eps, mm)}
+    return out
+
+
+def sweep_report(sweeps):
+    lines = []
+    for setting, sw in sweeps.items():
+        lines += [f"## Prior perturbation sweep, {setting} cameras ({sw['clips']} Clips x {sw['cameras']} cameras, full priors)",
+                  "", "Newest-frame MPJPE (mm) with the prior scaled by (1 + eps):", "",
+                  "| eps | " + " | ".join(f"{e:+.2f}" for e in sw["eps"]) + " |", "|---|" + "---|" * len(sw["eps"])]
+        for channel in ["segments", "focal"]:
+            lines.append(f"| {channel} | " + " | ".join(f"{v:.1f}" for v in sw[channel]["mpjpe_mm"]) + " |")
+        lines += ["", "| Slope (mm per unit eps) | eps > 0 | eps < 0 |", "|---|---|---|"]
+        for channel in ["segments", "focal"]:
+            sl = sw[channel]["slope_mm_per_eps"]
+            lines.append(f"| {channel} | {sl['positive']:+.1f} | {sl['negative']:+.1f} |")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def summarize_v2(errors, tasks):
@@ -149,6 +202,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--modes", nargs="+", default=list(MASKING_MODES_V2), choices=list(MASKING_MODES_V2))
     p.add_argument("--max-clips", type=int, help="first N Test clips only (quick checks)")
+    p.add_argument("--sweep-clips", type=int, default=0, help="prior perturbation sweep on N evenly spaced Test clips")
+    p.add_argument("--sweep-cameras", type=int, default=3)
     p.add_argument("--out", required=True, help="results .json (a .md report is written next to it)")
     args = p.parse_args()
 
@@ -159,7 +214,7 @@ def main():
     index = {n: i for i, n in enumerate(names)}
     base = REFERENCE if args.noise == "on" else replace(REFERENCE, noise=None)
 
-    results, per_clip = {}, {}
+    results, per_clip, sweeps = {}, {}, {}
     for s_i, setting in enumerate(CAMERA_SETTINGS):
         if setting not in args.settings:
             continue
@@ -167,14 +222,18 @@ def main():
                                    args.seed, args.modes, clip_index=index, setting_index=s_i)
         results[setting] = summarize_v2(errors, task_clips(names))
         per_clip[setting] = {m: {n: (e * 1000).round(2).tolist() for n, e in errors[m]["mpjpe"].items()} for m in errors}
+        if args.sweep_clips:
+            chosen = names[::max(1, len(names) // args.sweep_clips)][:args.sweep_clips]
+            sweeps[setting] = prior_sweep(model, {n: clips[n] for n in chosen}, replace(base, cameras=CAMERA_SETTINGS[setting]),
+                                          args.sweep_cameras, args.seed, index, s_i)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     n_params = sum(prm.numel() for prm in model.parameters())
     protocol = {k: str(v) for k, v in vars(args).items()}
     out.write_text(json.dumps({"protocol": protocol, "parameters": n_params, "summary": results,
-                               "per_clip_newest_mpjpe_mm": per_clip}, indent=1))
-    report = markdown_report(results)
+                               "per_clip_newest_mpjpe_mm": per_clip, "prior_sweep": sweeps}, indent=1))
+    report = markdown_report(results) + ("\n" + sweep_report(sweeps) if sweeps else "")
     out.with_suffix(".md").write_text(f"`{Path(args.checkpoint).name}`, {args.cameras} cameras/clip and setting, "
                                       f"seed {args.seed}, noise {args.noise}, {n_params:,} parameters\n\n{report}")
     print(report)

@@ -9,7 +9,13 @@ Training items follow protocol.REFERENCE: upright cameras (`--cameras`, wild by 
 in normalized camera coordinates with detector-like noise, camera-frame targets, Sliding window
 warmup. The Backbone always gets all Priors; the Versatile model draws a Masking mode
 (MASKING_MODES_V2) per batch and, unlike v1, fine-tunes every parameter, since the flag inputs are
-new. Without --init, the Versatile model is trained from scratch with the Backbone's schedule. Validation holds out whole training Clips; the Test clips are never touched.
+new. Without --init, the Versatile model is trained from scratch with the Backbone's schedule.
+
+Generation 2 options: --schedule onecycle (linear warmup to --lr over the first 5% of steps, then
+cosine to ~0, stepped every batch), --ema (validation, best.pt and evaluation use the EMA weights;
+last.pt keeps both), --seg-jitter (with probability 1/2, a training Window's Segment prior is scaled
+by one global factor and one factor per segment, so the model learns not to trust a wrong prior;
+the 3D target stays exact). Validation holds out whole training Clips; the Test clips are never touched.
 
 Resumable: if --out holds last.pt, training continues where it stopped (same command again after a
 timeout or cancel), and a finished run writes DONE and exits at once. Every epoch is seeded and a
@@ -18,6 +24,7 @@ one. --epochs-per-run and --time-limit stop early on purpose, to fit a walltime;
 mid-epoch in case the job is killed.
 """
 import argparse
+import copy
 import json
 import random
 import subprocess
@@ -63,6 +70,36 @@ def validate(model, loader, modes, device):
     return out
 
 
+SEG_JITTER_P = 0.5
+
+
+def jitter_segments(seg, global_max, segment_max):
+    """Segment priors (B,S) scaled, for half the Windows, by (1 + U(-g, g)) * (1 + U(-s, s)) per segment."""
+    hit = (torch.rand(len(seg), 1, device=seg.device) < SEG_JITTER_P).float()
+    g = 1 + global_max * (2 * torch.rand(len(seg), 1, device=seg.device) - 1)
+    s = 1 + segment_max * (2 * torch.rand(seg.shape, device=seg.device) - 1)
+    return seg * (1 + hit * (g * s - 1))
+
+
+class EMA:
+    """Exponential moving average of a model's floating-point state."""
+
+    def __init__(self, model, decay):
+        self.decay = decay
+        self.model = copy.deepcopy(model).eval()
+        for prm in self.model.parameters():
+            prm.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model):
+        src = model.state_dict()
+        for k, v in self.model.state_dict().items():
+            if v.dtype.is_floating_point:
+                v.mul_(self.decay).add_(src[k].detach(), alpha=1 - self.decay)
+            else:
+                v.copy_(src[k])
+
+
 def save_last(out, ckpt):
     torch.save(ckpt, out / "last.tmp")
     Path(out / "last.tmp").replace(out / "last.pt")   # atomic: a kill mid-save keeps the old last.pt
@@ -102,7 +139,12 @@ def main(argv=None):
     p.add_argument("--init", help="checkpoint to fine-tune (the versatile model starts from the backbone's)")
     p.add_argument("--epochs", type=int, help="default: 20 when fine-tuning (--init), else 50")
     p.add_argument("--batch", type=int, default=64)
-    p.add_argument("--lr", type=float, help="default: 1e-3 for the backbone, 1e-4 for fine-tuning")
+    p.add_argument("--lr", type=float, help="peak learning rate; default: 1e-3, 1e-4 when fine-tuning")
+    p.add_argument("--schedule", choices=["cosine", "onecycle"], default="cosine",
+                   help="cosine: per epoch from --lr, no warmup; onecycle: per step, 5%% warmup then cosine")
+    p.add_argument("--ema", type=float, help="EMA decay per step (e.g. 0.9999); evaluate the EMA weights")
+    p.add_argument("--seg-jitter", type=float, nargs=2, metavar=("GLOBAL", "SEGMENT"),
+                   help="max relative Segment prior error in training, e.g. 0.2 0.05")
     p.add_argument("--cameras", choices=list(CAMERA_SETTINGS), default="wild")
     p.add_argument("--no-noise", action="store_true")
     p.add_argument("--warmup", type=float, default=REFERENCE.warmup, help="probability of a warmup Window")
@@ -140,7 +182,16 @@ def main(argv=None):
 
     model = ReferenceLifter().to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    steps_per_epoch = len(train_ds) // args.batch
+    if args.max_steps:
+        steps_per_epoch = min(args.max_steps, steps_per_epoch)
+    if args.schedule == "onecycle":
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.epochs * steps_per_epoch,
+                                                    pct_start=0.05, cycle_momentum=False, div_factor=25,
+                                                    final_div_factor=1e4)
+    else:
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    ema = EMA(model, args.ema) if args.ema else None
     scaler = torch.amp.GradScaler(enabled=args.amp)
     modes = train_masking_modes(args.model)
     config = {**vars(args), "kind": "reference", "window": WINDOW, "protocol": repr(protocol),
@@ -153,10 +204,14 @@ def main(argv=None):
         opt.load_state_dict(ckpt["optimizer"])
         sched.load_state_dict(ckpt["scheduler"])
         scaler.load_state_dict(ckpt["scaler"])
+        if ema:
+            ema.model.load_state_dict(ckpt["ema_state_dict"])
         start, best, partial = ckpt["epoch"] + 1, ckpt["best"], ckpt.get("partial")
         print(f"resuming after epoch {ckpt['epoch']}" + (f", step {partial['step']}" if partial else ""))
     elif args.init:
         model.load_state_dict(load_reference(args.init, device).state_dict())
+        if ema:
+            ema.model.load_state_dict(model.state_dict())
     if start > args.epochs:
         print("already finished")
         (out / "DONE").touch()
@@ -181,12 +236,14 @@ def main(argv=None):
         loader = DataLoader(train_ds, batch_size=args.batch, sampler=order[skip * args.batch:].tolist(),
                             num_workers=args.workers, pin_memory=True, drop_last=True, generator=gen)
         t0 = time.time()
-        steps = min(args.max_steps, len(order) // args.batch) if args.max_steps else len(order) // args.batch
+        steps = steps_per_epoch
         pbar = tqdm(loader, desc=f"epoch {epoch}", mininterval=30, initial=skip, total=steps)
         for step, batch in enumerate(pbar, start=skip):
             if step >= steps:
                 break
             batch = to_device(batch, device)
+            if args.seg_jitter:
+                batch["seg"] = jitter_segments(batch["seg"], *args.seg_jitter)
             mode = random.choice(modes)
             with torch.autocast(device.type, enabled=args.amp):
                 loss, metrics = reference_loss(model(*model_inputs(batch, mode)), batch)
@@ -194,6 +251,10 @@ def main(argv=None):
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
+            if args.schedule == "onecycle":
+                sched.step()
+            if ema:
+                ema.update(model)
             step_log.append({"step": step, "mode": mode, "loss": loss.item(), **metrics})
             pbar.set_postfix(mpjpe=f"{metrics['mpjpe']:.4f}", refresh=False)
 
@@ -202,17 +263,21 @@ def main(argv=None):
                 save_last(out, {"epoch": epoch - 1, "model_state_dict": model.state_dict(), "config": config,
                                 "optimizer": opt.state_dict(), "scheduler": sched.state_dict(),
                                 "scaler": scaler.state_dict(), "best": best,
+                                "ema_state_dict": ema.model.state_dict() if ema else None,
                                 "partial": {"epoch": epoch, "step": step + 1, "step_log": step_log,
                                             "rng": rng_states()}})
                 last_save = time.time()
                 if stop:
                     print(f"time limit: saved epoch {epoch} at step {step + 1}")
                     return
-        sched.step()
+        if args.schedule == "cosine":
+            sched.step()
 
-        val = validate(model, val_loader, modes, device)
+        val = validate(ema.model if ema else model, val_loader, modes, device)
         log = {"epoch": epoch, "train_mpjpe": float(np.mean([s["mpjpe"] for s in step_log])),
                "val_mpjpe": val, "minutes": round((time.time() - t0) / 60, 1)}
+        if ema:  # val_mpjpe is the EMA model's; the raw weights for comparison
+            log["val_mpjpe_raw"] = validate(model, val_loader, ["full_priors"], device)
         print(json.dumps(log), flush=True)
         with open(out / "log.jsonl", "a") as f:
             f.write(json.dumps(log) + "\n")
@@ -223,11 +288,11 @@ def main(argv=None):
         best = min(best, val["full_priors"])
         ckpt = {"epoch": epoch, "model_state_dict": model.state_dict(), "val_mpjpe": val, "config": config,
                 "optimizer": opt.state_dict(), "scheduler": sched.state_dict(), "scaler": scaler.state_dict(),
-                "best": best}
+                "best": best, "ema_state_dict": ema.model.state_dict() if ema else None}
         save_last(out, ckpt)
         last_save = time.time()
-        if best_now:
-            torch.save(ckpt, out / "best.pt")
+        if best_now:  # the weights that were validated: EMA ones if any
+            torch.save({**ckpt, "model_state_dict": (ema.model if ema else model).state_dict()}, out / "best.pt")
     if last == args.epochs:
         (out / "DONE").touch()
 

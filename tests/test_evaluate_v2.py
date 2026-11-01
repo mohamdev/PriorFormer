@@ -64,3 +64,22 @@ def test_newest_frame_prediction_matches_a_single_window(model):
     with torch.no_grad():
         expected = model(*model_inputs(single, "full_priors"))[0, -1].numpy()
     np.testing.assert_allclose(preds[f, -1], expected, atol=1e-5)
+
+
+def test_side_slopes_are_fitted_separately_on_each_side_of_zero():
+    from priorformer.evaluate_v2 import side_slopes
+    eps = [-0.2, -0.1, 0.0, 0.1, 0.2]
+    err = [41.0, 40.5, 40.0, 50.0, 60.0]                      # +100 mm/eps above, -5 mm/eps below
+    assert side_slopes(eps, err) == pytest.approx({"positive": 100.0, "negative": -5.0})
+
+
+def test_the_unperturbed_sweep_point_equals_the_full_priors_evaluation(model):
+    from priorformer.evaluate_v2 import prior_sweep
+    clips = {"a.npz": Clip(moving_clip(20, 0)), "b.npz": Clip(moving_clip(16, 1))}
+    index = {"a.npz": 0, "b.npz": 1}
+    sweep = prior_sweep(model, clips, REFERENCE, 2, 0, index, 1, eps=[-0.1, 0.0, 0.1])
+    full = evaluate_clips_v2(model, clips, REFERENCE, 2, 0, ["full_priors"], clip_index=index, setting_index=1)
+    expected = 1000 * np.mean([e.mean() for e in full["full_priors"]["mpjpe"].values()])
+    for channel in ["segments", "focal"]:
+        assert sweep[channel]["mpjpe_mm"][1] == pytest.approx(expected, abs=0.01)
+        assert sweep[channel]["mpjpe_mm"][0] != sweep[channel]["mpjpe_mm"][2]   # the perturbation reaches the model

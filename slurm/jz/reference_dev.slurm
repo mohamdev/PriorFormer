@@ -12,7 +12,7 @@
 #
 # Research reference model (M0) on Jean Zay, one V100, in 2 h links. Each link runs the first
 # unfinished step and exits: Backbone training, Versatile training, evaluation (centered cameras),
-# evaluation (wild cameras). VARIANT=scratch trains the Versatile model from scratch instead (no
+# evaluation (wild cameras) of the Versatile model, then of the Backbone. VARIANT=scratch trains the Versatile model from scratch instead (no
 # Backbone), in its own folder. Training stops itself before the walltime and resumes mid-epoch, so the
 # same command is submitted again and again, for example as a chain of links (--dependency=afterany).
 # The project account is site-specific: pass it on the command line.
@@ -36,7 +36,10 @@ BACKBONE=$RUNS/reference_backbone
 VERSATILE=$RUNS/reference_versatile
 # stop training 100 min after the data is loaded: leaves time for loading, validation and the save
 TRAIN="python -u -m priorformer.train_v2 --data $DATA/train --workers $(( SLURM_CPUS_PER_TASK - 1 )) \
-       --time-limit 100 --save-every 10 ${TRAIN_ARGS:-}"
+       --time-limit 100 --save-every 10"
+# generation 2 recipe, every training step: OneCycle (peak 3e-4, 1e-4 when fine-tuning), EMA weights,
+# Segment prior noise (±20% global, ±5% per segment, on half the Windows)
+RECIPE="--schedule onecycle --ema 0.9999 --seg-jitter 0.2 0.05"
 
 cd "$REPO"
 # compute nodes have no git: read the commit from .git
@@ -47,34 +50,37 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 case ${VARIANT:-staged} in
     staged)
-        FINAL=$VERSATILE
+        EVALUATE="$VERSATILE $BACKBONE"
         if [ ! -f "$BACKBONE/DONE" ]; then
             echo "--- backbone"
-            srun --unbuffered $TRAIN --model backbone --out "$BACKBONE"
+            srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model backbone --out "$BACKBONE" ${TRAIN_ARGS:-}
             exit 0
         elif [ ! -f "$VERSATILE/DONE" ]; then
             echo "--- versatile"
-            srun --unbuffered $TRAIN --model versatile --init "$BACKBONE/best.pt" --out "$VERSATILE"
+            srun --unbuffered $TRAIN $RECIPE --lr 1e-4 --model versatile --init "$BACKBONE/best.pt" --out "$VERSATILE" ${TRAIN_ARGS:-}
             exit 0
         fi ;;
     scratch)
-        FINAL=$RUNS/reference_versatile_scratch
-        if [ ! -f "$FINAL/DONE" ]; then
+        EVALUATE=$RUNS/reference_versatile_scratch
+        if [ ! -f "$EVALUATE/DONE" ]; then
             echo "--- versatile from scratch"
-            srun --unbuffered $TRAIN --model versatile --out "$FINAL"
+            srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model versatile --out "$EVALUATE" ${TRAIN_ARGS:-}
             exit 0
         fi ;;
     *) echo "unknown VARIANT=$VARIANT"; exit 1 ;;
 esac
 
-EVAL=$FINAL/eval_v2
-for SETTING in centered wild; do
-    [ -f "$EVAL/$SETTING.json" ] && continue
-    echo "--- evaluate $SETTING"
-    mkdir -p "$EVAL"
-    srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$FINAL/best.pt" --clips "$DATA/test" \
-        --cameras 10 --settings $SETTING --out "$EVAL/$SETTING.json" ${EVAL_ARGS:-}
-    srun --unbuffered python -m priorformer.benchmark --checkpoint "$FINAL/best.pt" --reference > "$EVAL/benchmark_$SETTING.txt"
-    exit 0
+# one camera setting of one model per link
+for MODEL in $EVALUATE; do
+    for SETTING in centered wild; do
+        [ -f "$MODEL/eval_v2/$SETTING.json" ] && continue
+        echo "--- evaluate $(basename "$MODEL") $SETTING"
+        mkdir -p "$MODEL/eval_v2"
+        srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$MODEL/best.pt" --clips "$DATA/test" \
+            --cameras 10 --settings $SETTING --sweep-clips 200 --out "$MODEL/eval_v2/$SETTING.json" ${EVAL_ARGS:-}
+        srun --unbuffered python -m priorformer.benchmark --checkpoint "$MODEL/best.pt" --reference \
+            > "$MODEL/eval_v2/benchmark_$SETTING.txt"
+        exit 0
+    done
 done
-echo "--- all done: $EVAL"
+echo "--- all done: $EVALUATE"
