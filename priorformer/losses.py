@@ -34,3 +34,22 @@ def total_loss(pred, batch):
     reproj_px = reprojection_loss(pred, batch["x2d"], batch["K"], batch["R"], batch["t"])
     loss = pose_err + bone_err + REPROJ_WEIGHT * reproj_px / IMG_W
     return loss, {"mpjpe": pose_err.item(), "bone": bone_err.item(), "reproj_px": reproj_px.item()}
+
+
+def _masked_mean(x, mask):
+    return (x * mask).sum() / mask.sum().clamp(min=1)
+
+
+def reference_loss(pred, batch):
+    """Research reference model loss on real frames: MPJPE + bone + 0.01 * reprojection (normalized coordinates).
+
+    Reprojection compares (pred + root) / depth with the noise-free 2D in normalized camera coordinates.
+    """
+    frames = batch["frame_mask"]                                        # (B,T)
+    pose_err = _masked_mean((pred - batch["y3d"]).norm(dim=-1).mean(dim=-1), frames)
+    bone_err = _masked_mean((bone_lengths(pred) - bone_lengths(batch["y3d"])).abs().mean(dim=-1), frames)
+    cam = pred + batch["root"][:, :, None]
+    xy = cam[..., :2] / cam[..., 2:].clamp(min=1e-3)
+    reproj = _masked_mean((xy - batch["x2d_clean"]).abs().mean(dim=(-1, -2)), frames)
+    loss = pose_err + bone_err + REPROJ_WEIGHT * reproj
+    return loss, {"mpjpe": pose_err.item(), "bone": bone_err.item(), "reproj": reproj.item()}

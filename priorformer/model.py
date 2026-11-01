@@ -85,3 +85,74 @@ def mask_priors(k, seg, mode):
     """Zero the priors that `mode` masks."""
     mask_cam, mask_seg = MASKING_MODES[mode]
     return (torch.zeros_like(k) if mask_cam else k), (torch.zeros_like(seg) if mask_seg else seg)
+
+
+# ---- Research reference model (M0): the v1 encoder on camera-normalized 2D input ----
+
+N_FLAGS = 2   # [intrinsics estimated, segments masked]
+D_IN_REF = 2 + 1 + N_SEGMENTS + N_FLAGS  # normalized 2D joint + visibility + segment prior + flags
+
+
+class ReferenceLifter(nn.Module):
+    """x2d (B,T,J,2) normalized camera coordinates, vis (B,T,J), frame_mask (B,T), seg (B,6),
+    flags (B,2) -> root-relative 3D joints (B,T,J,3) in the camera frame.
+
+    Missing joints (vis 0) and frames outside the Window's real frames (frame_mask 0, Sliding
+    window warmup) are zeroed; masked frames are also excluded from attention, so their input
+    values never matter. In a live session the newest frame is the last slot.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.token_embed = nn.Linear(D_IN_REF, D_MODEL)
+        self.seg_token = nn.Parameter(torch.zeros(1, 1, D_MODEL))
+        self.flag_token = nn.Parameter(torch.zeros(1, 1, D_MODEL))
+        self.seg_embed = nn.Linear(N_SEGMENTS, D_MODEL)
+        self.flag_embed = nn.Linear(N_FLAGS, D_MODEL)
+        self.pos_enc = PositionalEncoding(D_MODEL)
+        enc_layer = nn.TransformerEncoderLayer(d_model=D_MODEL, nhead=N_HEAD, dim_feedforward=D_FF, batch_first=True)
+        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=N_LAYERS, enable_nested_tensor=False)
+        self.regressor = nn.Linear(D_MODEL, 3)
+
+    def forward(self, x2d, vis, frame_mask, seg, flags):
+        B, T, J, _ = x2d.shape
+        valid = vis * frame_mask[:, :, None]
+        seg_exp = seg[:, None, None, :].expand(B, T, J, N_SEGMENTS)
+        flags_exp = flags[:, None, None, :].expand(B, T, J, N_FLAGS)
+        tokens = torch.cat([x2d * valid[..., None], valid[..., None], seg_exp, flags_exp], dim=-1)
+        tokens = tokens * frame_mask[:, :, None, None]
+        x = self.token_embed(tokens.reshape(B, T * J, D_IN_REF))
+
+        seg_tok = self.seg_token.expand(B, -1, -1) + self.seg_embed(seg).unsqueeze(1)
+        flag_tok = self.flag_token.expand(B, -1, -1) + self.flag_embed(flags).unsqueeze(1)
+        x = self.pos_enc(torch.cat([seg_tok, flag_tok, x], dim=1))
+
+        ignore = torch.cat([torch.zeros(B, 2, device=x.device), (1 - frame_mask).repeat_interleave(J, dim=1)], dim=1) > 0.5
+        out = self.transformer(x, src_key_padding_mask=ignore)
+        return self.regressor(out[:, 2:, :].reshape(B, T, J, D_MODEL)) * frame_mask[:, :, None, None]
+
+
+def load_reference(path, device="cpu"):
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model = ReferenceLifter().to(device)
+    model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=True)
+    return model.eval()
+
+
+# Masking modes of the research reference model: name -> (camera estimated, segments masked).
+# "camera estimated" replaces v1's zeroed Camera prior: the 2D input is normalized with default intrinsics.
+MASKING_MODES_V2 = {
+    "full_priors": (False, False),
+    "camera_estimated": (True, False),
+    "segments_masked": (False, True),
+    "no_priors": (True, True),
+}
+
+
+def model_inputs(batch, mode):
+    """(x2d, vis, frame_mask, seg, flags) of a batch under a Masking mode of MASKING_MODES_V2."""
+    cam_est, seg_masked = MASKING_MODES_V2[mode]
+    x2d = batch["x2d_est"] if cam_est else batch["x2d"]
+    seg = torch.zeros_like(batch["seg"]) if seg_masked else batch["seg"]
+    flags = torch.tensor([float(cam_est), float(seg_masked)], device=seg.device).expand(len(seg), N_FLAGS)
+    return x2d, batch["vis"], batch["frame_mask"], seg, flags

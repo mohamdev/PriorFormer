@@ -52,3 +52,42 @@ def test_upright_v1_format_items_train_the_v1_model():
         opt.step()
         losses.append(loss.item())
     assert losses[-1] < 0.5 * losses[0]
+
+
+def test_camera_frame_targets_plus_the_root_project_onto_the_2d_input():
+    from priorformer.protocol import CENTERED, Protocol
+
+    ds = ProtocolWindowDataset([Clip(moving_clip(30, 2))], Protocol(cameras=CENTERED, input="normalized", target="camera"))
+    for idx in [0, 5, 17]:
+        item = ds[idx]
+        X = (item["y3d"] + item["root"][:, None]).numpy()
+        np.testing.assert_allclose(X[..., :2] / X[..., 2:], item["x2d"].numpy(), atol=1e-5)
+        hips = item["y3d"][:, [6, 7]].mean(dim=1)
+        torch.testing.assert_close(hips, torch.zeros_like(hips), atol=1e-6, rtol=0)
+        # camera-frame targets are a rotation of the Clip-frame Window: same bone lengths
+        np.testing.assert_allclose(np.linalg.norm(item["y3d"][:, 0] - item["y3d"][:, 2], axis=-1),
+                                   np.linalg.norm(moving_clip(30, 2)[idx:idx + 13, 0] - moving_clip(30, 2)[idx:idx + 13, 2], axis=-1),
+                                   atol=1e-5)
+
+
+def test_without_noise_the_2d_input_is_the_exact_projection():
+    from priorformer.protocol import WILD, Protocol
+
+    ds = ProtocolWindowDataset([Clip(moving_clip(30, 2))], Protocol(cameras=WILD, input="normalized", target="camera"))
+    item = ds[3]
+    torch.testing.assert_close(item["x2d"], item["x2d_clean"])
+    assert (item["vis"] == 1).all() and (item["frame_mask"] == 1).all()
+
+
+def test_warmup_hides_only_the_oldest_frames_of_some_windows():
+    from priorformer.protocol import REFERENCE
+
+    ds = ProtocolWindowDataset([Clip(moving_clip(200, 3))], REFERENCE)
+    masks = torch.stack([ds[i]["frame_mask"] for i in range(len(ds))])
+    hidden = masks == 0
+    assert 0.15 < hidden.any(dim=1).float().mean() < 0.45   # warmup probability 0.3
+    assert (masks[:, -1] == 1).all()                          # the newest frame is always real
+    # hidden frames are a prefix: once a frame is real, every newer one is too
+    assert (masks[:, 1:] >= masks[:, :-1]).all()
+    item = next(ds[i] for i in range(len(ds)) if ds[i]["frame_mask"][0] == 0)
+    assert (item["x2d"][item["frame_mask"] == 0] == 0).all() and (item["vis"][item["frame_mask"] == 0] == 0).all()

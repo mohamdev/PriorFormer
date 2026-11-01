@@ -128,3 +128,21 @@ def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
         K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], np.float32)
         if offset == 0 or in_image(pts, K, R, t, W, H):
             return Camera(K, R.astype(np.float32), t.astype(np.float32), W, H)
+
+
+def pixel_projection(points, K, R, t):
+    """Pixel coordinates (...,2) of points (...,3) in the Clip frame."""
+    cam = points @ R.T + t
+    uvw = cam @ K.T
+    return (uvw[..., :2] / uvw[..., 2:]).astype(np.float32)
+
+
+def normalize_keypoints(uv, K):
+    """Normalized camera coordinates ((u - cx)/fx, (v - cy)/fy) of pixel keypoints (...,2): X/Z, Y/Z."""
+    return ((uv - K[:2, 2]) / np.array([K[0, 0], K[1, 1]], np.float32)).astype(np.float32)
+
+
+def default_intrinsics(W, H):
+    """Intrinsics assumed when the Camera prior is unknown: f = image diagonal, principal point = center."""
+    f = np.hypot(W, H)
+    return np.array([[f, 0, W / 2], [0, f, H / 2], [0, 0, 1]], np.float32)

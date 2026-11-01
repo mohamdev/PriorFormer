@@ -7,8 +7,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from priorformer.camera import normalize_intrinsics, project, sample_camera, sample_camera_v2
-from priorformer.skeleton import segment_prior
+from priorformer.camera import (default_intrinsics, normalize_intrinsics, normalize_keypoints, pixel_projection,
+                               project, sample_camera, sample_camera_v2)
+from priorformer.noise import add_noise
+from priorformer.skeleton import JOINT_NAMES, segment_prior
+
+R_HIP, L_HIP = JOINT_NAMES.index("r_hip"), JOINT_NAMES.index("l_hip")
 
 WINDOW = 13
 
@@ -78,6 +82,10 @@ def load_clip_v2(path):
     return Clip(d["joints_3d"].astype(np.float32), (d["R"] @ np.array([0.0, 0.0, 1.0])).astype(np.float32))
 
 
+def load_clips_v2(folder, names):
+    return [load_clip_v2(Path(folder) / n) for n in names]
+
+
 class ProtocolWindowDataset(Dataset):
     """WindowDataset for any Protocol; with V1 it returns exactly WindowDataset's items.
 
@@ -115,4 +123,48 @@ def protocol_item(clip, y3d, up, r_body, protocol, rng):
         if protocol.cameras.random_size or protocol.target != "pelvis":
             raise ValueError("pixel input (pixels / 1920) needs fixed-size images and pelvis-frame targets")
         return v1_item(y3d, cam.K, cam.R, cam.t)
-    raise NotImplementedError(protocol.input)
+    item = observe(y3d, cam, protocol, rng)
+    if protocol.warmup and rng.random() < protocol.warmup:
+        hidden = len(y3d) - int(rng.integers(1, len(y3d)))   # keep 1 .. T-1 newest frames
+        item = hide_oldest_frames(item, hidden)
+    return {k: torch.from_numpy(v) for k, v in item.items()}
+
+
+def hide_oldest_frames(item, n):
+    """Sliding window warmup: the `n` oldest frames of a Window are not real frames yet."""
+    item = dict(item)
+    item["frame_mask"] = item["frame_mask"].copy()
+    item["frame_mask"][:n] = 0
+    for key in ["x2d", "x2d_est", "vis"]:
+        item[key] = item[key].copy()
+        item[key][:n] = 0
+    return item
+
+
+def observe(joints, cam, protocol, rng):
+    """Inputs and targets (numpy) of joints (T,J,3) seen by `cam` under a normalized-input protocol.
+
+    x2d: observed 2D in normalized camera coordinates with the true intrinsics; x2d_est: the same
+    with default intrinsics (camera estimated); x2d_clean: noise-free x2d; vis (T,J): 1 if observed;
+    frame_mask (T,): 1 for real frames; y3d: root-relative (mid-hip) targets in the camera frame;
+    root (T,3): mid-hip in the camera frame; seg: Segment prior.
+    """
+    if protocol.target != "camera":
+        raise ValueError("normalized input needs camera-frame targets")
+    cam_pts = joints @ cam.R.T + cam.t
+    root = cam_pts[:, [R_HIP, L_HIP]].mean(axis=1)
+    uv = pixel_projection(joints, cam.K, cam.R, cam.t)
+    vis = np.ones(uv.shape[:-1], np.float32)
+    uv_obs = uv
+    if protocol.noise is not None:
+        uv_obs, vis = add_noise(uv, protocol.noise, rng)
+    return {
+        "x2d": normalize_keypoints(uv_obs, cam.K) * vis[..., None],
+        "x2d_est": normalize_keypoints(uv_obs, default_intrinsics(cam.W, cam.H)) * vis[..., None],
+        "x2d_clean": normalize_keypoints(uv, cam.K),
+        "vis": vis,
+        "frame_mask": np.ones(len(joints), np.float32),
+        "y3d": (cam_pts - root[:, None]).astype(np.float32),
+        "root": root.astype(np.float32),
+        "seg": segment_prior(joints),
+    }
