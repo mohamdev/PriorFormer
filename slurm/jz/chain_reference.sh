@@ -1,15 +1,20 @@
 #!/bin/bash
 # Login-node loop that keeps one link of slurm/jz/reference_dev.slurm queued until every step is done:
-# every few minutes, if no pf_reference job is queued or running, submit the next link. Only one
-# job is ever submitted at a time, so it fits a small per-user submit limit. Stops when the
-# evaluation is finished, or after 3 links in a row died in under 10 minutes (read their logs).
-# Run it detached from the clone, so it survives logout:
-#   setsid nohup bash slurm/jz/chain_reference.sh <account> > $SCRATCH/priorformer/runs/logs/chain.log 2>&1 &
-# Stop it with: pkill -f chain_reference.sh
+# every few minutes, if no link of the variant (job pf_reference or pf_scratch) is queued or running,
+# submit the next one. Only one job per loop is ever submitted at a time, so it fits a small
+# per-user submit limit. Stops when the evaluation is finished, or after 3 links in a row died in under 10 minutes (read their logs).
+# Run it detached from the clone, so it survives logout (one loop per variant: staged or scratch):
+#   setsid nohup bash slurm/jz/chain_reference.sh <account> [variant] > $SCRATCH/priorformer/runs/logs/chain.log 2>&1 &
+# Stop it with: pkill -f "chain_reference.sh <account> [variant]"
 set -u
-ACCOUNT=${1:?usage: chain_reference.sh <account>}
+ACCOUNT=${1:?usage: chain_reference.sh <account> [staged|scratch]}
+VARIANT=${2:-staged}
 RUNS=${RUNS:-$SCRATCH/priorformer/runs}
-NAME=pf_reference
+case $VARIANT in
+    staged) NAME=pf_reference; FINAL=$RUNS/reference_versatile ;;
+    scratch) NAME=pf_scratch; FINAL=$RUNS/reference_versatile_scratch ;;
+    *) echo "unknown variant $VARIANT"; exit 1 ;;
+esac
 EVERY=${EVERY:-180}
 cd "$(dirname "$0")/../.."
 mkdir -p "$RUNS/logs"
@@ -17,7 +22,7 @@ mkdir -p "$RUNS/logs"
 fast_fails=0
 last=""
 while true; do
-    if [ -f "$RUNS/reference_versatile/eval_v2/wild.json" ]; then
+    if [ -f "$FINAL/eval_v2/wild.json" ]; then
         echo "$(date '+%F %T') all done"
         exit 0
     fi
@@ -37,7 +42,8 @@ while true; do
             exit 1
         fi
     fi
-    job=$(sbatch --parsable --account="$ACCOUNT" --output="$RUNS/logs/%x_%j.out" slurm/jz/reference_dev.slurm 2>&1)
+    job=$(sbatch --parsable --account="$ACCOUNT" --job-name=$NAME --export=ALL,VARIANT=$VARIANT \
+          --output="$RUNS/logs/%x_%j.out" --error="$RUNS/logs/%x_%j.out" slurm/jz/reference_dev.slurm 2>&1)
     if [[ "$job" =~ ^[0-9]+$ ]]; then
         echo "$(date '+%F %T') submitted link $job"
         last=$job

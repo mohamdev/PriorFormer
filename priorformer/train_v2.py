@@ -3,12 +3,13 @@
     python -m priorformer.train_v2 --model backbone --data <processed train clips> --out runs/reference_backbone
     python -m priorformer.train_v2 --model versatile --data <processed train clips> \
         --init runs/reference_backbone/best.pt --out runs/reference_versatile
+    python -m priorformer.train_v2 --model versatile --data <processed train clips> --out runs/reference_versatile_scratch
 
 Training items follow protocol.REFERENCE: upright cameras (`--cameras`, wild by default), 2D input
 in normalized camera coordinates with detector-like noise, camera-frame targets, Sliding window
 warmup. The Backbone always gets all Priors; the Versatile model draws a Masking mode
 (MASKING_MODES_V2) per batch and, unlike v1, fine-tunes every parameter, since the flag inputs are
-new. Validation holds out whole training Clips; the Test clips are never touched.
+new. Without --init, the Versatile model is trained from scratch with the Backbone's schedule. Validation holds out whole training Clips; the Test clips are never touched.
 
 Resumable: if --out holds last.pt, training continues where it stopped (same command again after a
 timeout or cancel), and a finished run writes DONE and exits at once. Every epoch is seeded and a
@@ -98,8 +99,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", required=True, choices=["backbone", "versatile"])
     p.add_argument("--data", required=True, help="folder of processed training clips (.npz)")
-    p.add_argument("--init", help="checkpoint to start from (required for versatile)")
-    p.add_argument("--epochs", type=int, help="default: 50 for the backbone, 20 for the versatile model")
+    p.add_argument("--init", help="checkpoint to fine-tune (the versatile model starts from the backbone's)")
+    p.add_argument("--epochs", type=int, help="default: 20 when fine-tuning (--init), else 50")
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--lr", type=float, help="default: 1e-3 for the backbone, 1e-4 for fine-tuning")
     p.add_argument("--cameras", choices=list(CAMERA_SETTINGS), default="wild")
@@ -116,9 +117,7 @@ def main(argv=None):
     p.add_argument("--amp", action="store_true")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
-    finetune = args.model != "backbone"
-    if finetune and not args.init:
-        p.error("--init is required for the versatile model")
+    finetune = args.init is not None
     args.lr = args.lr or (1e-4 if finetune else 1e-3)
     args.epochs = args.epochs or (20 if finetune else 50)
 

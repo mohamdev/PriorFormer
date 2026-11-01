@@ -76,3 +76,11 @@ def test_a_run_cut_mid_epoch_by_its_time_limit_resumes_to_the_same_result(clips_
     b = torch.load(tmp_path / "cut" / "last.pt", weights_only=False)["model_state_dict"]
     for k in a:
         torch.testing.assert_close(a[k], b[k], atol=1e-4, rtol=1e-4)
+
+
+def test_the_versatile_model_trains_from_scratch_without_a_backbone(clips_dir, tmp_path):
+    run(clips_dir, tmp_path / "scratch", "versatile", 1)
+    ckpt = torch.load(tmp_path / "scratch" / "last.pt", weights_only=False)
+    assert ckpt["config"]["init"] is None and ckpt["config"]["lr"] == 1e-3
+    assert set(ckpt["val_mpjpe"]) == {"full_priors", "camera_estimated", "segments_masked", "no_priors"}
+    assert (tmp_path / "scratch" / "DONE").exists()
