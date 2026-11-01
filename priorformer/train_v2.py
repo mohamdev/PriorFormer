@@ -197,6 +197,7 @@ def main(argv=None):
     config = {**vars(args), "kind": "reference", "window": WINDOW, "protocol": repr(protocol),
               "train_clips": len(train_names), "val_clips": len(val_names), "commit": git_commit()}
 
+    (out / "config.json").write_text(json.dumps(config, indent=1, default=str))   # readable without torch
     start, best, partial = 1, float("inf"), None
     if (out / "last.pt").exists():
         ckpt = torch.load(out / "last.pt", map_location=device, weights_only=False)
@@ -274,7 +275,8 @@ def main(argv=None):
             sched.step()
 
         val = validate(ema.model if ema else model, val_loader, modes, device)
-        log = {"epoch": epoch, "train_mpjpe": float(np.mean([s["mpjpe"] for s in step_log])),
+        log = {"epoch": epoch, "train_loss": float(np.mean([s["loss"] for s in step_log])),
+               "train_mpjpe": float(np.mean([s["mpjpe"] for s in step_log])),
                "val_mpjpe": val, "minutes": round((time.time() - t0) / 60, 1)}
         if ema:  # val_mpjpe is the EMA model's; the raw weights for comparison
             log["val_mpjpe_raw"] = validate(model, val_loader, ["full_priors"], device)
