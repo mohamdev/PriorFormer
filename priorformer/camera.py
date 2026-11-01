@@ -1,4 +1,6 @@
 """Synthetic monocular cameras looking at the pelvis origin, and the 2D/intrinsics normalization."""
+from typing import NamedTuple
+
 import numpy as np
 
 IMG_W, IMG_H = 1920, 1080
@@ -48,3 +50,81 @@ def project(points, K, R, t):
     cam = points @ R.T + t
     uvw = cam @ K.T
     return (uvw[..., :2] / (uvw[..., 2:] + 1e-8) / IMG_W).astype(np.float32)
+
+
+# ---- v2 cameras (protocol.CameraSetting): upright, optionally wild ----
+
+class Camera(NamedTuple):
+    K: np.ndarray       # (3,3) pixels
+    R: np.ndarray       # (3,3) Clip frame -> camera
+    t: np.ndarray       # (3,)
+    W: int              # image size, pixels
+    H: int
+
+
+def _image_size(rng, setting):
+    if not setting.random_size:
+        return IMG_W, IMG_H
+    long_side = int(rng.uniform(640, 3840))
+    short_side = int(round(long_side / (4 / 3 if rng.random() < 0.5 else 16 / 9)))
+    return (long_side, short_side) if rng.random() < 0.5 else (short_side, long_side)
+
+
+def _roll(R, deg):
+    a = np.deg2rad(deg)
+    Rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+    return Rz @ R
+
+
+def in_image(points, K, R, t, W, H, margin=0.0):
+    """True if every point (...,3) is in front of the camera and projects inside the image."""
+    cam = points.reshape(-1, 3) @ R.T + t
+    if (cam[:, 2] <= 1e-3).any():
+        return False
+    uv = (cam @ K.T)[:, :2] / cam[:, 2:]
+    m = margin * min(W, H)
+    return bool((uv[:, 0] >= m).all() and (uv[:, 0] <= W - m).all() and (uv[:, 1] >= m).all() and (uv[:, 1] <= H - m).all())
+
+
+def sample_camera_v2(points, rng, setting, up, r_body=None, tries=100):
+    """Random upright camera for root-relative joints `points` (...,J,3) in the Clip frame.
+
+    Image up is gravity `up` (up to a random roll); the camera is never below the lowest joint.
+    The camera sits around the mid-hip (origin) and looks at it, or with `target_offset` at a
+    random point near it, in which case the points are kept inside the image.
+    """
+    pts = points.reshape(-1, 3)
+    r_body = r_body or np.linalg.norm(pts, axis=1).max()
+    up = up / np.linalg.norm(up)
+    min_height = (pts @ up).min()
+    W, H = _image_size(rng, setting)
+    for attempt in range(tries + 1):
+        if setting.f_px is not None:
+            f = rng.uniform(*setting.f_px)
+        else:
+            f = rng.uniform(*setting.f_rel) * np.hypot(W, H)
+        if setting.fill is not None:
+            dist = max(r_body * f / (rng.uniform(*setting.fill) * min(W, H) / 2), 1.2 * r_body)
+        else:
+            dist = r_body * rng.uniform(*setting.distance)
+        while True:
+            v = rng.normal(size=3)
+            v /= np.linalg.norm(v) + 1e-8
+            cam_pos = v * dist
+            height = cam_pos @ up
+            if height >= min_height and np.linalg.norm(cam_pos - height * up) >= r_body * DIST_MIN / 2:
+                break
+        offset = setting.target_offset if attempt < tries else 0.0
+        target = np.zeros(3)
+        if offset > 0:
+            d = rng.normal(size=3)
+            target = d / (np.linalg.norm(d) + 1e-8) * rng.uniform(0, offset) * r_body
+        R = look_at_R(cam_pos, target, up=-up)  # camera y points down the image, i.e. along -up
+        if setting.roll_deg:
+            R = _roll(R, rng.uniform(-setting.roll_deg, setting.roll_deg))
+        t = -R @ cam_pos
+        cx = W / 2 + rng.uniform(-setting.pp_jitter, setting.pp_jitter) * W
+        cy = H / 2 + rng.uniform(-setting.pp_jitter, setting.pp_jitter) * H
+        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], np.float32)
+        if offset == 0 or in_image(pts, K, R, t, W, H):
+            return Camera(K, R.astype(np.float32), t.astype(np.float32), W, H)

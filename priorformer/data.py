@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from priorformer.camera import normalize_intrinsics, project, sample_camera
+from priorformer.camera import normalize_intrinsics, project, sample_camera, sample_camera_v2
 from priorformer.skeleton import segment_prior
 
 WINDOW = 13
@@ -109,4 +109,10 @@ class ProtocolWindowDataset(Dataset):
 
 
 def protocol_item(clip, y3d, up, r_body, protocol, rng):
-    raise NotImplementedError("only the V1 protocol is implemented so far")
+    """Training item of a Window y3d (T,J,3) of `clip` under a non-V1 protocol."""
+    cam = sample_camera_v2(y3d, rng, protocol.cameras, up, r_body)
+    if protocol.input == "pixels":
+        if protocol.cameras.random_size or protocol.target != "pelvis":
+            raise ValueError("pixel input (pixels / 1920) needs fixed-size images and pelvis-frame targets")
+        return v1_item(y3d, cam.K, cam.R, cam.t)
+    raise NotImplementedError(protocol.input)

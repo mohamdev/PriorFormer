@@ -28,3 +28,27 @@ def test_v1_protocol_reproduces_the_v1_window_dataset_exactly():
             assert a.keys() == b.keys()
             for key in a:
                 torch.testing.assert_close(a[key], b[key], rtol=0, atol=0)
+
+
+def test_upright_v1_format_items_train_the_v1_model():
+    from torch.utils.data import DataLoader
+
+    from priorformer.losses import total_loss
+    from priorformer.model import TransformerLifter
+    from priorformer.protocol import CENTERED, Protocol
+
+    ds = ProtocolWindowDataset([Clip(moving_clip(40, s)) for s in range(3)], Protocol(cameras=CENTERED))
+    item = ds[0]
+    assert item["x2d"].shape == (13, 12, 2) and item["y3d"].shape == (13, 12, 3)
+    torch.manual_seed(0)
+    model = TransformerLifter()
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    batch = next(iter(DataLoader(ds, batch_size=16, shuffle=False)))
+    losses = []
+    for _ in range(100):
+        loss, _ = total_loss(model(batch["x2d"], batch["k"], batch["seg"]), batch)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+    assert losses[-1] < 0.5 * losses[0]
