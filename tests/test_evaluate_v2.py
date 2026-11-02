@@ -107,3 +107,14 @@ def test_the_unperturbed_sweep_point_equals_the_full_priors_evaluation(model):
     for channel in ["segments", "focal"]:
         assert sweep[channel]["mpjpe_mm"][1] == pytest.approx(expected, abs=0.01)
         assert sweep[channel]["mpjpe_mm"][0] != sweep[channel]["mpjpe_mm"][2]   # the perturbation reaches the model
+
+
+def test_the_bone_stretching_row_rescores_the_full_priors_predictions_with_stretched_bones(model):
+    clips = {"a.npz": Clip(moving_clip(20, 0))}
+    plain = evaluate_clips_v2(model, clips, REFERENCE, 2, 0, ["full_priors"])
+    both = evaluate_clips_v2(model, clips, REFERENCE, 2, 0, ["full_priors"], stretch=True)
+
+    assert set(both) == {"full_priors", "full_priors_stretched"}
+    assert set(both["full_priors_stretched"]) == set(plain["full_priors"])
+    np.testing.assert_array_equal(both["full_priors"]["mpjpe"]["a.npz"], plain["full_priors"]["mpjpe"]["a.npz"])
+    assert not np.allclose(both["full_priors_stretched"]["mpjpe"]["a.npz"], plain["full_priors"]["mpjpe"]["a.npz"])

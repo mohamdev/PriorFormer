@@ -37,7 +37,7 @@ from priorformer.evaluate import summarize
 from priorformer.metrics import bone_length_error, mpjpe, n_mpjpe, pa_mpjpe, per_joint_error
 from priorformer.model import MASKING_MODES_V2, load_reference, model_inputs
 from priorformer.protocol import CAMERA_SETTINGS, REFERENCE
-from priorformer.skeleton import pose_segment_priors
+from priorformer.skeleton import pose_segment_priors, stretch_to_segments
 from priorformer.splits import read_split, task_clips
 
 REPO = Path(__file__).resolve().parents[1]
@@ -91,22 +91,31 @@ def clip_metrics(preds, gt, window=WINDOW):
     return out
 
 
-def evaluate_clips_v2(model, clips, protocol, n_cameras, seed, modes, clip_index=None, setting_index=0):
-    """Metrics per mode, metric and Clip: {mode: {metric: {name: array(n_cameras, ...)}}}."""
+def evaluate_clips_v2(model, clips, protocol, n_cameras, seed, modes, clip_index=None, setting_index=0,
+                      stretch=False):
+    """Metrics per mode, metric and Clip: {mode: {metric: {name: array(n_cameras, ...)}}}.
+
+    stretch adds "full_priors_stretched" (bone-stretching test): the full_priors predictions with each
+    Segment prior bone stretched to the prior's length."""
     clip_index = clip_index or {name: i for i, name in enumerate(sorted(clips))}
-    out = {mode: {} for mode in modes}
+    modes = list(modes)
+    out = {mode: {} for mode in modes + (["full_priors_stretched"] if stretch else [])}
     for name, clip in tqdm(clips.items(), desc="clips", mininterval=10):
         if len(clip.joints) < WINDOW:
             print(f"[warn] skipping {name}: {len(clip.joints)} frames < one Window")
             continue
-        per_cam = {mode: [] for mode in modes}
+        per_cam = {mode: [] for mode in out}
         for cam_i in range(n_cameras):
             rng = np.random.default_rng([seed, setting_index, clip_index[name], cam_i])
             cam = sample_camera_v2(clip.joints, rng, protocol.cameras, clip.up)
             obs = observe(clip.joints, cam, protocol, rng)
             for mode in modes:
-                per_cam[mode].append(clip_metrics(predict_windows(model, obs, clip.joints, mode), obs["y3d"]))
-        for mode in modes:
+                preds = predict_windows(model, obs, clip.joints, mode)
+                per_cam[mode].append(clip_metrics(preds, obs["y3d"]))
+                if stretch and mode == "full_priors":
+                    seg = pose_segment_priors(clip.joints[newest_frame_windows(len(clip.joints))[0][:, 0]])
+                    per_cam["full_priors_stretched"].append(clip_metrics(stretch_to_segments(preds, seg[:, None]), obs["y3d"]))
+        for mode in out:
             for metric in per_cam[mode][0]:
                 out[mode].setdefault(metric, {})[name] = np.array([m[metric] for m in per_cam[mode]])
     return out
@@ -238,6 +247,7 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--modes", nargs="+", default=list(MASKING_MODES_V2), choices=list(MASKING_MODES_V2))
     p.add_argument("--max-clips", type=int, help="first N Test clips only (quick checks)")
+    p.add_argument("--stretch", action="store_true", help="add the bone-stretching test (full_priors_stretched)")
     p.add_argument("--sweep-clips", type=int, default=0, help="prior perturbation sweep on N evenly spaced Test clips")
     p.add_argument("--sweep-cameras", type=int, default=3)
     p.add_argument("--out", required=True, help="results .json (a .md report is written next to it)")
@@ -255,7 +265,7 @@ def main():
         if setting not in args.settings:
             continue
         errors = evaluate_clips_v2(model, clips, replace(base, cameras=CAMERA_SETTINGS[setting]), args.cameras,
-                                   args.seed, args.modes, clip_index=index, setting_index=s_i)
+                                   args.seed, args.modes, clip_index=index, setting_index=s_i, stretch=args.stretch)
         results[setting] = summarize_v2(errors, task_clips(names))
         per_clip[setting] = {m: {n: (e * 1000).round(2).tolist() for n, e in errors[m]["mpjpe"].items()} for m in errors}
         if args.sweep_clips:

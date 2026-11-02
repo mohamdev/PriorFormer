@@ -65,3 +65,27 @@ def test_limb_length_spread_is_the_std_of_per_clip_median_lengths():
     varied = [np.stack([t_pose()] * 3), np.stack([t_pose() * 1.1] * 4)]
     # R thigh 0.44 m and 0.484 m: std 0.022 m
     np.testing.assert_allclose(limb_length_spread(varied, (6, 8)), 0.022, atol=1e-6)
+
+
+def test_stretching_gives_the_given_lengths_and_keeps_directions_and_hips():
+    from priorformer.skeleton import SEG_NORM, SEGMENT_PAIRS, stretch_to_segments
+
+    rng = np.random.default_rng(0)
+    pose = t_pose() + rng.normal(0, 0.03, (12, 3))
+    lengths = np.array([0.30, 0.22, 0.41, 0.0, 0.47, 0.36])     # (0, 6) is not a bone: left as is
+    out = stretch_to_segments(pose, lengths / SEG_NORM)
+
+    for k, (a, b) in enumerate(SEGMENT_PAIRS[:3] + SEGMENT_PAIRS[4:]):
+        given = np.delete(lengths, 3)[k]
+        np.testing.assert_allclose(np.linalg.norm(out[b] - out[a]), given, atol=1e-6)
+        before, after = pose[b] - pose[a], out[b] - out[a]
+        np.testing.assert_allclose(after / np.linalg.norm(after), before / np.linalg.norm(before), atol=1e-6)
+    np.testing.assert_array_equal(out[[6, 7]], pose[[6, 7]])
+    np.testing.assert_allclose(out[[0, 1]].mean(axis=0), pose[[0, 1]].mean(axis=0), atol=1e-6)
+
+
+def test_stretching_a_pose_to_its_own_lengths_changes_nothing():
+    from priorformer.skeleton import pose_segment_priors, stretch_to_segments
+
+    poses = t_pose()[None] + np.random.default_rng(1).normal(0, 0.03, (5, 12, 3))
+    np.testing.assert_allclose(stretch_to_segments(poses, pose_segment_priors(poses)), poses, atol=1e-6)

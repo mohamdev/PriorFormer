@@ -108,3 +108,21 @@ Negative slopes on the eps < 0 side mean the error grows as the prior shrinks.
 - **No control run without jitter.** The run without prior noise wasn't trained (no free GPU slot), so the robustness can't be attributed to the jitter alone. Real body shapes in the data may also teach the model not to trust the prior blindly. Hu Yan's own intervention, on v1 with jitter as the only change, suggests jitter is the main factor.
 - **The v1 sweep uses the v1 protocol** (exact 2D, every frame averaged). Slopes in mm per unit eps are comparable; absolute errors are not.
 - **The Versatile model fine-tuned from the Backbone is still training.** It may beat the from-scratch model.
+
+## 4. Bone-stretching test (#11)
+
+`bone_stretching.{json,md}`: the Versatile model's full_priors predictions, with each Segment prior bone stretched to the prior's length. The stretched bones are the 2 forearms and 2 thighs, plus shoulder width, stretched about the mid-shoulder. Each bone keeps its predicted direction, and the joints below it move with it. No training is involved. All 800 Test clips, 3 cameras.
+
+| Newest-frame (mm) | centered: raw | centered: stretched | wild: raw | wild: stretched |
+|---|---|---|---|---|
+| MPJPE | 32.8 | **29.8** | 29.3 | **26.6** |
+| N-MPJPE | 28.4 | 28.5 | 25.4 | 25.5 |
+| PA-MPJPE | 23.1 | 22.9 | 20.5 | 20.2 |
+| Bone-length error | 12.9 | 7.8 | 11.8 | 7.0 |
+| Knees / ankles | 29.6 / 48.4 | 24.9 / 42.5 | 26.4 / 43.6 | 22.1 / 38.7 |
+| Wrists | 47.7 | 44.0 | 42.2 | 38.5 |
+
+- **Imposing the given lengths cuts MPJPE by 3 mm (9%).** The model only half-uses the Segment prior (follow 0.10–0.45, section 3); using it through the skeleton makes it use the prior fully.
+- **The whole gain is scale.** N-MPJPE doesn't change, so the predicted directions are as good as before, and the stretch fixes their length. This is the gain that the forward-kinematics design of M2 targets (hypothesis H3).
+- **Only 5 of the 12 tree bones are stretched,** because the v1 Segment prior has no upper arms, shanks or hip width. Segment prior v2 (all tree bones) should give more.
+- **Caveat:** this uses exact lengths. Forward kinematics trusts the prior completely, so a wrong prior will cost more than it costs the current model (section 3). M2 should be evaluated with the prior perturbation sweep, and keep a predicted-length path for when the prior is masked.
