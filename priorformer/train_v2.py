@@ -4,6 +4,7 @@
     python -m priorformer.train_v2 --model versatile --data <processed train clips> \
         --init runs/reference_backbone/best.pt --out runs/reference_versatile
     python -m priorformer.train_v2 --model versatile --data <processed train clips> --out runs/reference_versatile_scratch
+    python -m priorformer.train_v2 --model versatile --data <train clips> <train_extra clips> --out runs/reference_full_amass
 
 Training items follow protocol.REFERENCE: upright cameras (`--cameras`, wild by default), 2D input
 in normalized camera coordinates with detector-like noise, camera-frame targets, Sliding window
@@ -37,7 +38,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from priorformer.data import WINDOW, ProtocolWindowDataset, load_clips_v2
+from priorformer.data import WINDOW, ProtocolWindowDataset, load_clip_v2
 from priorformer.losses import reference_loss
 from priorformer.model import MASKING_MODES_V2, ReferenceLifter, load_reference, model_inputs
 from priorformer.protocol import CAMERA_SETTINGS, REFERENCE
@@ -135,7 +136,8 @@ def git_commit():
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", required=True, choices=["backbone", "versatile"])
-    p.add_argument("--data", required=True, help="folder of processed training clips (.npz)")
+    p.add_argument("--data", required=True, nargs="+",
+                   help="folder(s) of processed training clips (.npz); names must be unique across folders")
     p.add_argument("--init", help="checkpoint to fine-tune (the versatile model starts from the backbone's)")
     p.add_argument("--epochs", type=int, help="default: 20 when fine-tuning (--init), else 50")
     p.add_argument("--batch", type=int, default=64)
@@ -171,11 +173,12 @@ def main(argv=None):
     protocol = replace(REFERENCE, cameras=CAMERA_SETTINGS[args.cameras], warmup=args.warmup,
                        noise=None if args.no_noise else REFERENCE.noise)
 
-    names = sorted(f.name for f in Path(args.data).glob("*.npz"))[:args.max_clips]
+    folder_of = {f.name: f.parent for d in args.data for f in Path(d).glob("*.npz")}
+    names = sorted(folder_of)[:args.max_clips]
     train_names, val_names = split_clips(names, args.val_fraction, args.seed)
     (out / "val_clips.txt").write_text("\n".join(val_names) + "\n")
-    train_ds = ProtocolWindowDataset(load_clips_v2(args.data, train_names), protocol, seed=args.seed)
-    val_ds = ProtocolWindowDataset(load_clips_v2(args.data, val_names), replace(protocol, warmup=0.0),
+    train_ds = ProtocolWindowDataset([load_clip_v2(folder_of[n] / n) for n in train_names], protocol, seed=args.seed)
+    val_ds = ProtocolWindowDataset([load_clip_v2(folder_of[n] / n) for n in val_names], replace(protocol, warmup=0.0),
                                    stride=VAL_STRIDE, seed=args.seed + 1)
     print(f"{len(train_names)} train clips ({len(train_ds)} windows), {len(val_names)} val clips ({len(val_ds)} windows)")
     val_loader = DataLoader(val_ds, batch_size=512, num_workers=args.workers, pin_memory=True)

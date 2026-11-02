@@ -125,3 +125,14 @@ def test_segment_prior_jitter_leaves_half_the_windows_exact_and_stays_in_bounds(
     ratio = out[~exact]
     assert ratio.min() >= 0.8 * 0.95 - 1e-6 and ratio.max() <= 1.2 * 1.05 + 1e-6
     assert ratio.max() > 1.15 and ratio.min() < 0.85          # the range is used on both sides
+
+
+def test_training_reads_the_clips_of_several_folders(clips_dir, tmp_path):
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    for i in range(3):
+        np.savez(extra / f"extra_{i}.npz", joints_3d=moving_clip(30, 10 + i), R=np.eye(3), t=np.zeros(3))
+    train_v2.main(["--model", "backbone", "--data", str(clips_dir), str(extra), "--out", str(tmp_path / "both"),
+                   "--epochs", "1", "--batch", "8", "--max-steps", "1", "--workers", "0", "--val-fraction", "0.34"])
+    config = json.loads((tmp_path / "both" / "config.json").read_text())
+    assert config["train_clips"] + config["val_clips"] == 9

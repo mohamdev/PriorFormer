@@ -64,6 +64,22 @@ python scripts/preprocess_amass.py --amass <AMASS root> --smplx <SMPL-X models> 
 
 This writes `data/train/` and `data/test/` using the split in [`splits/`](splits): **5452 training and 800 test clips**, split randomly by clip (subjects and all three subsets appear on both sides; ACCAD is not held out). The `.tsv` files map each processed clip to its AMASS file; for 371 clips the motion name and length match several AMASS files (often duplicate recordings) and all candidates are listed. By default, preprocessing reproduces the paper's data, which ignored body shape (see Corrections 7); add `--with-shape` for new models.
 
+**Full AMASS (more training data).** The other AMASS subsets are split by [`scripts/make_amass_full_split.py`](scripts/make_amass_full_split.py), and the v1 split and the 800 Test clips stay unchanged:
+
+| Split file | Clips | Frames | Content |
+|---|---|---|---|
+| `train_clips.tsv` (v1) | 5,452 | 4.1M | ACCAD, BMLmovi, KIT |
+| `train_extra_clips.tsv` | 7,998 | 14.0M (33.8 h) | BMLrub, BMLhandball, CMU, DanceDB, GRAB, HDM05, HUMAN4D, PosePrior, MoSh, SFU, SOMA, TCD hands, 63 KIT clips missing from v1 |
+| `unseen_clips.tsv` | 205 | 0.3M (1.1 h) | Transitions, SSM (AMASS's own test subsets), TotalCapture, HumanEva (with real video, for a later benchmark). Never trained on. |
+
+None of the new clips is within 30 mm of a same-length Test clip or Unseen clip (criterion of Correction 8). Clip frame rates are kept as recorded: 120 Hz for most, 100 Hz for KIT, 60 Hz for 495 CMU clips. Each processed clip stores its `fps`.
+
+```bash
+python scripts/preprocess_amass.py --amass <AMASS root> --smplx <SMPL-X models> --out data --with-shape --splits train_extra unseen
+python -m priorformer.train_v2 --model versatile --data data/train data/train_extra --out runs/reference_full_amass
+python -m priorformer.evaluate_v2 --checkpoint runs/reference_full_amass/best.pt --clips data/unseen --split splits/unseen_clips.tsv --out results/unseen.json
+```
+
 ## Train
 
 ```bash

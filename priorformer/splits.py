@@ -27,6 +27,12 @@ def read_split(tsv_path):
     return [line.split("\t")[0] for line in lines if line]
 
 
+def normalize_source(source):
+    """v1 sources repeat the subset folder (KIT/KIT/424/x.npz); new ones don't (KIT/424/x.npz)."""
+    parts = source.split("/")
+    return "/".join(parts[1:]) if len(parts) > 2 and parts[0] == parts[1] else source
+
+
 def split_clips(clips, val_fraction, seed):
     """Hold out whole clips for validation. Returns (train, val), both sorted."""
     clips = sorted(clips)

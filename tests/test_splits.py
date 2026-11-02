@@ -32,3 +32,26 @@ def test_walk_excludes_stair_clips():
     tasks = task_clips(["1_walking_fast01_poses.npz", "2_upstairs_walk03_poses.npz"])
     assert tasks["walk"] == ["1_walking_fast01_poses.npz"]
     assert tasks["stairs_climbing"] == ["2_upstairs_walk03_poses.npz"]
+
+
+def test_new_amass_clips_skip_v1_sources_and_keep_whole_subsets_unseen():
+    from scripts.make_amass_full_split import assign_new_clips
+
+    sources = ["KIT/3/walk_poses.npz", "KIT/3/run_poses.npz", "CMU/01/01_01_poses.npz",
+               "TotalCapture/s1/walking1_poses.npz", "AMASS_Filtered/KIT/3/walk_poses.npz"]
+    train, unseen = assign_new_clips(sources, used=["KIT/KIT/3/walk_poses.npz"],
+                                      unseen_subsets=("TotalCapture",), first_index=10000)
+
+    assert train == [("10000_01_01_poses.npz", "CMU/01/01_01_poses.npz"),
+                     ("10001_run_poses.npz", "KIT/3/run_poses.npz")]
+    assert unseen == [("10002_walking1_poses.npz", "TotalCapture/s1/walking1_poses.npz")]
+
+
+def test_processed_names_are_unique_across_all_split_files():
+    names = [n for f in sorted(SPLITS.glob("*_clips.tsv")) if f.name != "test_clips_near_train.tsv"
+             for n in read_split(f)]
+    v1 = set(read_split(SPLITS / "train_clips.tsv")) | set(read_split(SPLITS / "test_clips.tsv"))
+    new = [n for n in names if n not in v1]
+
+    assert len(new) == len(set(new))
+    assert not set(new) & v1

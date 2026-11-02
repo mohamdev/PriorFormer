@@ -73,6 +73,10 @@ _Avoid_: validation set, held-out set
 Whole Clips held out from the training Clips to select checkpoints during training.
 _Avoid_: validation windows
 
+**Unseen clips**:
+The Clips of whole AMASS subsets that are never used for training (Transitions, SSM, TotalCapture, HumanEva), listed in `splits/unseen_clips.tsv`. They test subjects, labs and motions absent from training, which the Test clips cannot.
+_Avoid_: held-out set, cross-dataset test
+
 ## Evaluation
 
 **Task**:

@@ -3,15 +3,16 @@
     python scripts/preprocess_amass.py --amass <AMASS root containing ACCAD/, BMLmovi/, KIT/> \
         --smplx <SMPL-X models folder: {female,male,neutral}/model.npz> --out <data folder>
 
-Writes <out>/train/ and <out>/test/ with the file names listed in splits/*_clips.tsv.
+Writes <out>/<split>/ for each --splits name (default: train test) with the file names listed in
+splits/<split>_clips.tsv; train_extra and unseen come from scripts/make_amass_full_split.py.
 Each joint center is the mean of SMPL-X vertices from smpl/amass/vertices_keypoints_corr.csv.
 
 By default the subject's shape coefficients (betas) are NOT applied, exactly like the data the
 paper's models were trained on: every body then has the SMPL-X template shape of its gender.
 Pass --with-shape to use the real body shapes (recommended for new models), and write them to
-their own --out folder. Each processed clip stores its gender and the betas that were applied
-(zeros without --with-shape). The AMASS betas fitted for SMPL+H are applied to the SMPL-X model, as
-the poses already are: bodies vary like the subjects' but are not their exact SMPL-X shapes.
+their own --out folder. Each processed clip stores its gender, the betas that were applied
+(zeros without --with-shape) and its mocap frame rate (fps). The AMASS betas fitted for SMPL+H are
+applied to the SMPL-X model, as the poses already are: bodies vary like the subjects' but are not their exact SMPL-X shapes.
 
 Requires human_body_prior (https://github.com/nghorbani/human_body_prior).
 """
@@ -24,6 +25,7 @@ import torch
 from human_body_prior.body_model.body_model import BodyModel
 
 from priorformer.skeleton import JOINT_NAMES
+from priorformer.splits import normalize_source
 
 REPO = Path(__file__).resolve().parents[1]
 JOINT_VERTICES = {  # joint -> named SMPL-X vertices that are averaged
@@ -42,9 +44,14 @@ def named_vertices():
         return {row["Name"]: int(row["Index"]) for row in csv.DictReader(f)}
 
 
-def pelvis_frame_joints(verts, markers):
-    """(F,V,3) mesh vertices -> (F,12,3) joints in the pelvis frame, its rotation, and the first mid-hip."""
-    joints = np.stack([verts[:, [markers[m] for m in JOINT_VERTICES[j]]].mean(axis=1) for j in JOINT_NAMES], axis=1)
+def vertex_joints(verts, markers):
+    """(F,V,3) mesh vertices -> (F,12,3) joint centers."""
+    return np.stack([verts[:, [markers[m] for m in JOINT_VERTICES[j]]].mean(axis=1) for j in JOINT_NAMES], axis=1)
+
+
+def pelvis_frame_joints(joints):
+    """(F,12,3) joint centers -> joints in the pelvis frame, its rotation, and the first mid-hip."""
+    joints = joints.copy()
     r_hip, l_hip, r_sh, l_sh = (JOINT_NAMES.index(j) for j in ["r_hip", "l_hip", "r_shoulder", "l_shoulder"])
     hip_mid = (joints[:, r_hip] + joints[:, l_hip]) / 2
     joints -= hip_mid[:, None]                                           # mid-hip origin, every frame
@@ -68,13 +75,14 @@ def main():
     p.add_argument("--smplx", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--with-shape", action="store_true", help="apply the subject's betas (differs from the paper)")
+    p.add_argument("--splits", nargs="+", default=["train", "test"], help="splits/<name>_clips.tsv to process")
     p.add_argument("--skip-existing", action="store_true", help="keep clips already in --out (resume a run)")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     markers = named_vertices()
     body_models = {}
-    for split in ["train", "test"]:
+    for split in args.splits:
         out_dir = Path(args.out) / split
         out_dir.mkdir(parents=True, exist_ok=True)
         with open(REPO / "splits" / f"{split}_clips.tsv") as f:
@@ -85,7 +93,11 @@ def main():
             source = row["amass_source"].split("|")[0]
             if "|" in row["amass_source"]:
                 print(f"[warn] {row['processed_file']}: ambiguous source, using {source}")
-            data = np.load(Path(args.amass) / source)
+            path = Path(args.amass) / source
+            if not path.exists():  # AMASS unpacked without the repeated subset folder (KIT/424/x.npz)
+                path = Path(args.amass) / normalize_source(source)
+            data = np.load(path)
+            fps = float(data["mocap_framerate"] if "mocap_framerate" in data else data["mocap_frame_rate"])
             gender = data["gender"].item()
             gender = gender.decode() if isinstance(gender, bytes) else str(gender)
             if gender not in body_models:
@@ -98,12 +110,12 @@ def main():
             if args.with_shape:
                 betas = data["betas"][:NUM_BETAS].astype(np.float32)
                 params["betas"] = torch.tensor(betas, device=device).expand(len(poses), -1)
-            with torch.no_grad():  # in chunks of frames, so that long Clips fit in a small GPU
-                verts = np.concatenate([body_models[gender](**{k: v[i:i + CHUNK] for k, v in params.items()})
-                                        .v.cpu().numpy() for i in range(0, len(poses), CHUNK)])
-            joints, R, hip_mid = pelvis_frame_joints(verts, markers)
+            with torch.no_grad():  # in chunks of frames, keeping only joints, so that long Clips fit in memory
+                joints = np.concatenate([vertex_joints(body_models[gender](**{k: v[i:i + CHUNK] for k, v in params.items()})
+                                                       .v.cpu().numpy(), markers) for i in range(0, len(poses), CHUNK)])
+            joints, R, hip_mid = pelvis_frame_joints(joints)
             np.savez(out_dir / row["processed_file"], joints_3d=joints.astype(np.float32), R=R, t=hip_mid,
-                     betas=betas, gender=gender)
+                     betas=betas, gender=gender, fps=fps)
         print(f"{split}: {len(rows)} clips -> {out_dir}")
 
 
