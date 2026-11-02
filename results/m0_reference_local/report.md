@@ -55,6 +55,7 @@ M0's task is harder, except for the camera-frame targets, which remove an error 
 - **The Segment prior fixes scale.** Without it, the scale-free N-MPJPE rises less than MPJPE (+2.8 vs +4.6 mm), and the bone-length error rises from 12.9 to 16.3 mm.
 - **Without the true focal length, the errors are mostly in the legs.** In camera estimated mode the ankles get +16 mm and the knees +6 mm, while the upper body changes by 1–3 mm. That fits a depth and foreshortening error.
 - **Warmup is short.** With 4–5 frames of history, the error is already within about 3 mm of a full Window.
+- **Size and speed:** 533,379 parameters. `benchmark.py` (one Window, batch 1) gives 2.2 ms on CPU (i7-11800H) and 1.1 ms on GPU (RTX 3050 Ti laptop). v1 takes 1.7 / 0.8 ms on the same machine; the two prior tokens and the attention mask add about 30%.
 - **Wild cameras score lower than centered ones** (29.3 vs 32.8 mm). The wild setting includes closer, wider-angle views, where perspective gives more depth cues. This is a hypothesis we haven't checked.
 
 ## 3. Sensitivity to wrong priors (Hu Yan's test)

@@ -111,6 +111,35 @@ The paper's Table II averages were 36.4 / 38.7 / 39.2 / 41.2 mm. Paired over the
 
 **Expert model** (Table I): the reproduction is being retrained with whole-clip validation; results will be added here.
 
+## v1.1: research reference model
+
+The [`v1.1-checkpoints` release](https://github.com/mohamdev/PriorFormer/releases/tag/v1.1-checkpoints) has one Versatile model (PyTorch and ONNX), for research use only. It keeps the v1 architecture and fixes the data and the protocol ([plan](docs/plan-v2.md), milestone M0):
+- real AMASS body shapes (Corrections 7)
+- upright cameras with roll
+- 2D input in normalized camera coordinates, with default intrinsics and a flag when the camera is unknown
+- root-relative 3D output in the camera frame
+- wide-range cameras, noisy 2D keypoints and Sliding window warmup in training
+- Segment prior noise in training (±20% global × ±5% per segment, on half the Windows)
+- OneCycle learning rate with EMA weights
+
+Load it with `load_reference` and evaluate it with `python -m priorformer.evaluate_v2`. Training is in `priorformer/train_v2.py`.
+
+The evaluation (protocol v2) differs from the v1 evaluation above:
+- every Test clip is seen through random cameras in two Camera settings, **centered** (v1 ranges) and **wild** (focal length 0.35–1.5 × the image diagonal, off-center subject, any image size, roll)
+- 2D keypoints are noisy
+- each frame is predicted as the newest frame of its Window, as in a live session
+
+The numbers are therefore not comparable with the v1 table.
+
+Newest-frame MPJPE (mm), 800 Test clips, 3 cameras per clip and setting ([report](results/m0_reference_local/report.md)):
+
+| Camera setting | full priors | camera estimated | segments masked | no priors |
+|---|---|---|---|---|
+| centered | 32.8 | 37.5 | 37.4 | 41.9 |
+| wild | 29.3 | 35.1 | 34.7 | 40.3 |
+
+The priors matter more than in v1: masking both costs 9–11 mm. A Segment prior that is 30% too long now adds 8 mm, against 220 mm for v1. Within the training noise range the model treats the prior as a hint, not a rule, but errors of 50% still hurt. 533k parameters; one Window takes 2.2 ms on CPU (i7-11800H) and 1.1 ms on GPU (RTX 3050 Ti laptop), against 1.7 / 0.8 ms for v1.
+
 ## Corrections (October 2026)
 
 An audit of the code against the paper found the following. The released model, the paper's average accuracy and the average effect of the priors reproduce; the per-task numbers and several descriptions do not.
