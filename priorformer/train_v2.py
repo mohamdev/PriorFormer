@@ -40,7 +40,7 @@ from tqdm import tqdm
 
 from priorformer.data import WINDOW, ProtocolWindowDataset, load_clip_v2
 from priorformer.losses import reference_loss
-from priorformer.model import MASKING_MODES_V2, ReferenceLifter, load_reference, model_inputs
+from priorformer.model import MASKING_MODES_V2, SIZES, ReferenceLifter, load_reference, model_inputs
 from priorformer.protocol import CAMERA_SETTINGS, REFERENCE
 from priorformer.splits import split_clips
 
@@ -156,6 +156,7 @@ def main(argv=None):
     p.add_argument("--epochs-per-run", type=int, help="stop after N epochs in this run (resume later)")
     p.add_argument("--time-limit", type=float, help="minutes: save and stop mid-epoch after this (resume later)")
     p.add_argument("--save-every", type=float, help="minutes between mid-epoch saves of last.pt")
+    p.add_argument("--size", choices=list(SIZES), default="base", help="model size (model.SIZES)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--amp", action="store_true")
@@ -183,7 +184,7 @@ def main(argv=None):
     print(f"{len(train_names)} train clips ({len(train_ds)} windows), {len(val_names)} val clips ({len(val_ds)} windows)")
     val_loader = DataLoader(val_ds, batch_size=512, num_workers=args.workers, pin_memory=True)
 
-    model = ReferenceLifter().to(device)
+    model = ReferenceLifter(**SIZES[args.size]).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     steps_per_epoch = len(train_ds) // args.batch
     if args.max_steps:

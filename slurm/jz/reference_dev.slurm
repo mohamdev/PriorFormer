@@ -15,7 +15,9 @@
 # evaluation (wild cameras) of the Versatile model, then of the Backbone. VARIANT=scratch trains the Versatile model from scratch instead (no
 # Backbone), in its own folder. VARIANT=full trains it from scratch on the
 # v1 Train clips plus the extra Train clips (full AMASS, FULL_EPOCHS epochs, default 6) and also evaluates it on
-# the Unseen clips. Training stops itself before the walltime and resumes mid-epoch, so the
+# the Unseen clips. SIZE=medium|large (model.SIZES) trains that size instead, with mixed precision, in
+# reference_full_amass_<size>. TRAIN_MINUTES (default 100) and EVAL_CAMERAS (default 10) adapt the
+# links to a longer QoS or a slower model. Training stops itself before the walltime and resumes mid-epoch, so the
 # same command is submitted again and again, for example as a chain of links (--dependency=afterany).
 # The project account is site-specific: pass it on the command line.
 #   sbatch --account=<account> slurm/jz/reference_dev.slurm
@@ -36,11 +38,12 @@ DATA=${DATA:-$SCRATCH/priorformer/data/amass_shaped}
 RUNS=${RUNS:-$SCRATCH/priorformer/runs}
 BACKBONE=$RUNS/reference_backbone
 VERSATILE=$RUNS/reference_versatile
+SIZE=${SIZE:-base}
 # stop training 100 min after the data is loaded: leaves time for loading, validation and the save
 TRAIN_DATA=$DATA/train
 [ "${VARIANT:-staged}" = full ] && TRAIN_DATA="$DATA/train $DATA/train_extra"
 TRAIN="python -u -m priorformer.train_v2 --data $TRAIN_DATA --workers $(( SLURM_CPUS_PER_TASK - 1 )) \
-       --time-limit 100 --save-every 10"
+       --time-limit ${TRAIN_MINUTES:-100} --save-every 10"
 # generation 2 recipe, every training step: OneCycle (peak 3e-4, 1e-4 when fine-tuning), EMA weights,
 # Segment prior noise (±20% global, ±5% per segment, on half the Windows)
 RECIPE="--schedule onecycle --ema 0.9999 --seg-jitter 0.2 0.05"
@@ -73,9 +76,14 @@ case ${VARIANT:-staged} in
         fi ;;
     full)
         EVALUATE=$RUNS/reference_full_amass
+        SIZE_ARGS=""
+        if [ "$SIZE" != base ]; then
+            EVALUATE=${EVALUATE}_$SIZE
+            SIZE_ARGS="--size $SIZE --amp"
+        fi
         if [ ! -f "$EVALUATE/DONE" ]; then
-            echo "--- versatile from scratch, full AMASS"
-            srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model versatile --epochs ${FULL_EPOCHS:-6} \
+            echo "--- versatile from scratch, full AMASS, size $SIZE"
+            srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model versatile --epochs ${FULL_EPOCHS:-6} $SIZE_ARGS \
                 --out "$EVALUATE" ${TRAIN_ARGS:-}
             exit 0
         fi ;;
@@ -89,7 +97,7 @@ for MODEL in $EVALUATE; do
         echo "--- evaluate $(basename "$MODEL") $SETTING"
         mkdir -p "$MODEL/eval_v2"
         srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$MODEL/best.pt" --clips "$DATA/test" \
-            --cameras 10 --settings $SETTING --sweep-clips 200 --out "$MODEL/eval_v2/$SETTING.json" ${EVAL_ARGS:-}
+            --cameras ${EVAL_CAMERAS:-10} --settings $SETTING --sweep-clips 200 --out "$MODEL/eval_v2/$SETTING.json" ${EVAL_ARGS:-}
         srun --unbuffered python -m priorformer.benchmark --checkpoint "$MODEL/best.pt" --reference \
             > "$MODEL/eval_v2/benchmark_$SETTING.txt"
         exit 0
@@ -100,7 +108,7 @@ if [ "${VARIANT:-staged}" = full ]; then
         [ -f "$EVALUATE/eval_v2/unseen_$SETTING.json" ] && continue
         echo "--- evaluate $(basename "$EVALUATE") $SETTING on the Unseen clips"
         srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$EVALUATE/best.pt" --clips "$DATA/unseen" \
-            --split splits/unseen_clips.tsv --cameras 10 --settings $SETTING --stretch \
+            --split splits/unseen_clips.tsv --cameras ${EVAL_CAMERAS:-10} --settings $SETTING --stretch \
             --out "$EVALUATE/eval_v2/unseen_$SETTING.json" ${EVAL_ARGS:-}
         exit 0
     done

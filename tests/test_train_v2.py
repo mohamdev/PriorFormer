@@ -136,3 +136,18 @@ def test_training_reads_the_clips_of_several_folders(clips_dir, tmp_path):
                    "--epochs", "1", "--batch", "8", "--max-steps", "1", "--workers", "0", "--val-fraction", "0.34"])
     config = json.loads((tmp_path / "both" / "config.json").read_text())
     assert config["train_clips"] + config["val_clips"] == 9
+
+
+def test_a_larger_size_trains_and_reloads_with_its_own_architecture(clips_dir, tmp_path):
+    from priorformer.model import SIZES, load_reference
+
+    run(clips_dir, tmp_path / "medium", "versatile", 1, ["--size", "medium"])
+    model = load_reference(tmp_path / "medium" / "best.pt")
+    small = sum(p.numel() for p in load_reference(_train_base(clips_dir, tmp_path)).parameters())
+    assert model.d_model == SIZES["medium"]["d_model"]
+    assert sum(p.numel() for p in model.parameters()) > 3 * small
+
+
+def _train_base(clips_dir, tmp_path):
+    run(clips_dir, tmp_path / "base", "versatile", 1)
+    return tmp_path / "base" / "best.pt"

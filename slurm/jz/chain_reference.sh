@@ -6,6 +6,8 @@
 # Run it detached from the clone, so it survives logout (one loop per variant: staged, scratch or full):
 #   setsid nohup bash slurm/jz/chain_reference.sh <account> [variant] > $SCRATCH/priorformer/runs/logs/chain.log 2>&1 &
 # Stop it with: pkill -f "chain_reference.sh <account> [variant]"
+# Environment passed to every link: SIZE (variant full), FULL_EPOCHS, TRAIN_MINUTES, EVAL_CAMERAS; QOS and
+# WALLTIME replace the dev QoS and its 2 h (e.g. QOS=qos_gpu-t3 WALLTIME=20:00:00 TRAIN_MINUTES=1150).
 set -u
 ACCOUNT=${1:?usage: chain_reference.sh <account> [staged|scratch|full]}
 VARIANT=${2:-staged}
@@ -13,7 +15,8 @@ RUNS=${RUNS:-$SCRATCH/priorformer/runs}
 case $VARIANT in
     staged) NAME=pf_reference; FINAL=$RUNS/reference_backbone ;;      # evaluated last
     scratch) NAME=pf_scratch; FINAL=$RUNS/reference_versatile_scratch ;;
-    full) NAME=pf_full; FINAL=$RUNS/reference_full_amass ;;
+    full) NAME=pf_full; FINAL=$RUNS/reference_full_amass
+          if [ "${SIZE:-base}" != base ]; then NAME=pf_full_$SIZE; FINAL=${FINAL}_$SIZE; fi ;;
     *) echo "unknown variant $VARIANT"; exit 1 ;;
 esac
 EVERY=${EVERY:-180}
@@ -45,7 +48,7 @@ while true; do
             exit 1
         fi
     fi
-    job=$(sbatch --parsable --account="$ACCOUNT" --job-name=$NAME --export=ALL,VARIANT=$VARIANT \
+    job=$(sbatch --parsable --account="$ACCOUNT" --job-name=$NAME ${QOS:+--qos=$QOS --time=${WALLTIME:?WALLTIME with QOS}} --export=ALL,VARIANT=$VARIANT \
           --output="$RUNS/logs/%x_%j.out" --error="$RUNS/logs/%x_%j.out" slurm/jz/reference_dev.slurm 2>&1)
     if [[ "$job" =~ ^[0-9]+$ ]]; then
         echo "$(date '+%F %T') submitted link $job"

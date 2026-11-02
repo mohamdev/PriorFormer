@@ -91,6 +91,12 @@ def mask_priors(k, seg, mode):
 
 N_FLAGS = 2   # [intrinsics estimated, segments masked]
 D_IN_REF = 2 + 1 + N_SEGMENTS + N_FLAGS  # normalized 2D joint + visibility + segment prior + flags
+# Research reference model sizes; base is v1's encoder (v1.1 release).
+SIZES = {
+    "base": dict(d_model=D_MODEL, n_layers=N_LAYERS, n_heads=N_HEAD, d_ff=D_FF),
+    "medium": dict(d_model=256, n_layers=4, n_heads=8, d_ff=512),
+    "large": dict(d_model=256, n_layers=8, n_heads=8, d_ff=1024),
+}
 
 
 class ReferenceLifter(nn.Module):
@@ -102,17 +108,18 @@ class ReferenceLifter(nn.Module):
     values never matter. In a live session the newest frame is the last slot.
     """
 
-    def __init__(self):
+    def __init__(self, d_model=D_MODEL, n_layers=N_LAYERS, n_heads=N_HEAD, d_ff=D_FF):
         super().__init__()
-        self.token_embed = nn.Linear(D_IN_REF, D_MODEL)
-        self.seg_token = nn.Parameter(torch.zeros(1, 1, D_MODEL))
-        self.flag_token = nn.Parameter(torch.zeros(1, 1, D_MODEL))
-        self.seg_embed = nn.Linear(N_SEGMENTS, D_MODEL)
-        self.flag_embed = nn.Linear(N_FLAGS, D_MODEL)
-        self.pos_enc = PositionalEncoding(D_MODEL)
-        enc_layer = nn.TransformerEncoderLayer(d_model=D_MODEL, nhead=N_HEAD, dim_feedforward=D_FF, batch_first=True)
-        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=N_LAYERS, enable_nested_tensor=False)
-        self.regressor = nn.Linear(D_MODEL, 3)
+        self.d_model = d_model
+        self.token_embed = nn.Linear(D_IN_REF, d_model)
+        self.seg_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.flag_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.seg_embed = nn.Linear(N_SEGMENTS, d_model)
+        self.flag_embed = nn.Linear(N_FLAGS, d_model)
+        self.pos_enc = PositionalEncoding(d_model)
+        enc_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=d_ff, batch_first=True)
+        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=n_layers, enable_nested_tensor=False)
+        self.regressor = nn.Linear(d_model, 3)
 
     def forward(self, x2d, vis, frame_mask, seg, flags):
         B, T, J, _ = x2d.shape
@@ -129,12 +136,13 @@ class ReferenceLifter(nn.Module):
 
         ignore = torch.cat([torch.zeros(B, 2, device=x.device), (1 - frame_mask).repeat_interleave(J, dim=1)], dim=1) > 0.5
         out = self.transformer(x, src_key_padding_mask=ignore)
-        return self.regressor(out[:, 2:, :].reshape(B, T, J, D_MODEL)) * frame_mask[:, :, None, None]
+        return self.regressor(out[:, 2:, :].reshape(B, T, J, self.d_model)) * frame_mask[:, :, None, None]
 
 
 def load_reference(path, device="cpu"):
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    model = ReferenceLifter().to(device)
+    size = ckpt.get("config", {}).get("size") or "base"   # checkpoints before sizes are base
+    model = ReferenceLifter(**SIZES[size]).to(device)
     model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=True)
     return model.eval()
 

@@ -21,9 +21,11 @@ from pathlib import Path
 RUNS = {"reference_backbone": ("pf_reference", "backbone", None),
         "reference_versatile": ("pf_reference", "versatile", "reference_backbone"),
         "reference_versatile_scratch": ("pf_scratch", "versatile from scratch", None),
-        "reference_full_amass": ("pf_full", "versatile from scratch, full AMASS", None)}
+        "reference_full_amass": ("pf_full", "versatile from scratch, full AMASS, size base", None),
+        "reference_full_amass_medium": ("pf_full_medium", "versatile from scratch, full AMASS, size medium", None),
+        "reference_full_amass_large": ("pf_full_large", "versatile from scratch, full AMASS, size large", None)}
 DEFAULT_EPOCHS = {"reference_backbone": 50, "reference_versatile": 20, "reference_versatile_scratch": 50,
-                  "reference_full_amass": 6}
+                  "reference_full_amass": 6, "reference_full_amass_medium": 6, "reference_full_amass_large": 4}
 MODES = ["full_priors", "camera_estimated", "segments_masked", "no_priors"]
 SHORT = {"full_priors": "full", "camera_estimated": "cam est", "segments_masked": "seg mask", "no_priors": "none"}
 STALE_MINUTES = 20
@@ -50,8 +52,8 @@ def loops():
         out = subprocess.run(["pgrep", "-af", "chain_reference.sh"], capture_output=True, text=True).stdout
     except OSError:
         return []
-    return ["scratch" if line.rstrip().endswith("scratch") else "two-stage" for line in out.splitlines()
-            if "pgrep" not in line]
+    variants = {"scratch": "scratch", "full": "full"}
+    return [variants.get(line.split()[-1], "two-stage") for line in out.splitlines() if "pgrep" not in line]
 
 
 def newest_log(logs, job_name):
@@ -100,7 +102,7 @@ def run_block(runs, logs, name, all_jobs, n_epochs):
     job_list = all_jobs.get(job_name, [])
     running = [j for j in job_list if j[1] == "RUNNING"]
     pending = [j for j in job_list if j[1] == "PENDING"]
-    if done_train and len(evals) >= 2:
+    if done_train and len(evals) >= (4 if name.startswith("reference_full_amass") else 2):   # + Unseen clips
         state = "DONE (trained and evaluated)"
     elif running and running_here:
         state = f"RUNNING  job {running[0][0]}, {running[0][2]} into this 2 h link"
@@ -119,7 +121,7 @@ def run_block(runs, logs, name, all_jobs, n_epochs):
 
     lines = [f"\033[1m{name}\033[0m  {state}"]
     if config:
-        lines.append(f"  recipe: lr {config.get('lr')} {config.get('schedule', 'cosine')}, ema {config.get('ema')}, "
+        lines.append(f"  recipe: size {config.get('size') or 'base'}{' amp' if config.get('amp') else ''}, lr {config.get('lr')} {config.get('schedule', 'cosine')}, ema {config.get('ema')}, "
                      f"seg jitter {config.get('seg_jitter')}, {config.get('train_clips')} train clips")
 
     if running and running_here and tail:
