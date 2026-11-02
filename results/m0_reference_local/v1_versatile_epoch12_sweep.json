@@ -1,0 +1,110 @@
+{
+ "protocol": {
+  "checkpoint": "checkpoints/best_lifter_versatile_128_ddp_epoch12.pt",
+  "clips": "/home/aladinedev/Projects/gitpackages/lifter-rsync/smpl/amass/smplh/amass_3D_poses/val",
+  "split": "/home/aladinedev/Projects/gitpackages/2D-to-3D-pose-lifter/splits/test_clips.tsv",
+  "sweep_clips": "200",
+  "cameras": "3",
+  "seed": "0",
+  "out": "results/m0_reference_local/v1_versatile_epoch12_sweep.json"
+ },
+ "prior_sweep": {
+  "v1": {
+   "eps": [
+    -0.5,
+    -0.3,
+    -0.2,
+    -0.1,
+    -0.05,
+    0.0,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.5
+   ],
+   "clips": 200,
+   "cameras": 3,
+   "segments": {
+    "mpjpe_mm": [
+     44.59,
+     44.01,
+     43.57,
+     43.03,
+     41.31,
+     39.88,
+     43.37,
+     55.52,
+     123.88,
+     259.6,
+     414.63
+    ],
+    "slope_mm_per_eps": {
+     "positive": 692.577193922298,
+     "negative": -12.026279230785978
+    },
+    "slope_sem": {
+     "positive": 4.799679794343377,
+     "negative": 0.674875825959208
+    },
+    "bone_ratio": [
+     1.0041,
+     1.0025,
+     1.0023,
+     1.0026,
+     1.0094,
+     1.0147,
+     1.0229,
+     1.0361,
+     0.9396,
+     0.5402,
+     0.0951
+    ],
+    "follow": {
+     "positive": -1.566097606479678,
+     "negative": 0.032968608247246636
+    }
+   },
+   "focal": {
+    "mpjpe_mm": [
+     39.92,
+     39.9,
+     39.89,
+     39.88,
+     39.88,
+     39.88,
+     39.88,
+     39.88,
+     39.89,
+     39.91,
+     39.95
+    ],
+    "slope_mm_per_eps": {
+     "positive": 0.13013511706309713,
+     "negative": -0.08407592773437499
+    },
+    "slope_sem": {
+     "positive": 0.06936757990081154,
+     "negative": 0.06361601637283537
+    },
+    "bone_ratio": [
+     1.0149,
+     1.0148,
+     1.0148,
+     1.0148,
+     1.0148,
+     1.0147,
+     1.0147,
+     1.0147,
+     1.0147,
+     1.0147,
+     1.0147
+    ],
+    "follow": {
+     "positive": -0.00018126292593134905,
+     "negative": -0.00020592634085659167
+    }
+   }
+  }
+ }
+}

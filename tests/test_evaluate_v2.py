@@ -8,6 +8,7 @@ from priorformer.evaluate_v2 import (clip_metrics, evaluate_clips_v2, newest_fra
 from priorformer.model import ReferenceLifter
 from priorformer.protocol import REFERENCE
 
+from test_priors_camera import t_pose
 from test_protocol import moving_clip
 
 
@@ -71,6 +72,29 @@ def test_side_slopes_are_fitted_separately_on_each_side_of_zero():
     eps = [-0.2, -0.1, 0.0, 0.1, 0.2]
     err = [41.0, 40.5, 40.0, 50.0, 60.0]                      # +100 mm/eps above, -5 mm/eps below
     assert side_slopes(eps, err) == pytest.approx({"positive": 100.0, "negative": -5.0})
+
+
+def test_side_slopes_of_a_matrix_are_the_slopes_of_each_column():
+    from priorformer.evaluate_v2 import side_slopes
+    eps = [-0.2, -0.1, 0.0, 0.1, 0.2]
+    a, b = [41.0, 40.5, 40.0, 50.0, 60.0], [30.0, 30.0, 30.0, 32.0, 34.0]
+    both = side_slopes(eps, np.array([a, b]).T)
+    np.testing.assert_allclose(both["positive"], [100.0, 20.0])
+    np.testing.assert_allclose(both["negative"], [-5.0, 0.0])
+
+
+def test_follow_is_one_when_the_prediction_takes_the_scaled_lengths_and_zero_when_it_ignores_them():
+    from priorformer.evaluate_v2 import bone_ratio, side_slopes, sweep_summary
+    gt = t_pose()[None]
+    eps = [-0.2, 0.0, 0.2]
+    follows = [[bone_ratio(gt * (1 + e), gt)] for e in eps]       # pose about the origin: lengths scale by 1 + eps
+    ignores = [[bone_ratio(gt, gt)] for e in eps]
+    assert side_slopes(eps, np.array(follows)[:, 0]) == pytest.approx({"positive": 1.0, "negative": 1.0})
+    errs = [[0.04], [0.04], [0.04]]
+    out = sweep_summary(eps, {"segments": errs, "focal": errs}, {"segments": follows, "focal": ignores}, 1, 1)
+    assert out["segments"]["follow"] == pytest.approx({"positive": 1.0, "negative": 1.0})
+    assert out["focal"]["follow"] == pytest.approx({"positive": 0.0, "negative": 0.0})
+    assert out["segments"]["bone_ratio"] == pytest.approx([0.8, 1.0, 1.2])
 
 
 def test_the_unperturbed_sweep_point_equals_the_full_priors_evaluation(model):

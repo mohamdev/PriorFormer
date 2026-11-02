@@ -17,7 +17,10 @@ Errors are averaged over frames, then cameras, then Clips; the Task average is t
 --sweep-clips N adds the prior perturbation sweep on N evenly spaced Test clips: with full priors,
 the Segment prior is scaled by (1 + eps), or the focal length used to normalize the 2D input is
 (1 + eps) times the true one, on the same cameras and noise for every eps. It reports newest-frame
-MPJPE per eps and, on each side, the least-squares slope (mm per unit eps) of the increase over eps = 0.
+MPJPE per eps and, on each side, the least-squares slope (mm per unit eps) of the increase over eps = 0
+(± its standard error over Clips and cameras); and the bone ratio, predicted / true length of the
+Segment prior pairs: its slope (follow) is 1 when the prediction takes the scaled lengths, 0 when it
+ignores them.
 """
 import argparse
 import json
@@ -110,30 +113,56 @@ def evaluate_clips_v2(model, clips, protocol, n_cameras, seed, modes, clip_index
 
 
 def side_slopes(eps, err_mm):
-    """Least-squares slopes (mm per unit eps) of err(eps) - err(0) for eps > 0 and eps < 0."""
-    eps, d = np.asarray(eps), np.asarray(err_mm) - err_mm[list(eps).index(0.0)]
-    pos, neg = eps > 0, eps < 0
-    return {"positive": float((eps[pos] * d[pos]).sum() / (eps[pos] ** 2).sum()),
-            "negative": float((eps[neg] * d[neg]).sum() / (eps[neg] ** 2).sum())}
+    """Least-squares slopes (mm per unit eps) of err(eps) - err(0) for eps > 0 and eps < 0.
+
+    err_mm is (n_eps,) or (n_eps, n): then one slope per column."""
+    eps, err = list(eps), np.asarray(err_mm, dtype=float)
+    d = err - err[eps.index(0.0)]
+    e = np.asarray(eps).reshape(-1, *[1] * (d.ndim - 1))
+    pos, neg = e.ravel() > 0, e.ravel() < 0
+    slope = lambda m: (e[m] * d[m]).sum(axis=0) / (e[m] ** 2).sum()
+    if d.ndim == 1:
+        return {"positive": float(slope(pos)), "negative": float(slope(neg))}
+    return {"positive": slope(pos), "negative": slope(neg)}
+
+
+def bone_ratio(pred, gt):
+    """Mean predicted / true length of the Segment prior pairs over frames (pred, gt: (F,J,3))."""
+    return float((pose_segment_priors(pred) / np.maximum(pose_segment_priors(gt), 1e-6)).mean())
 
 
 def prior_sweep(model, clips, protocol, n_cameras, seed, clip_index, setting_index, eps=SWEEP_EPS):
-    """Newest-frame MPJPE (mm, full priors) per eps for a scaled Segment prior and a scaled focal length."""
+    """Newest-frame MPJPE (mm, full priors) and bone ratio per eps, for a scaled Segment prior and a
+    scaled focal length; slopes of both on each side of eps = 0."""
     errs = {"segments": [[] for _ in eps], "focal": [[] for _ in eps]}
+    ratios = {"segments": [[] for _ in eps], "focal": [[] for _ in eps]}
     for name, clip in tqdm(clips.items(), desc="sweep", mininterval=10):
         if len(clip.joints) < WINDOW:
             continue
         for cam_i in range(n_cameras):
             rng = np.random.default_rng([seed, setting_index, clip_index[name], cam_i])
             obs = observe(clip.joints, sample_camera_v2(clip.joints, rng, protocol.cameras, clip.up), protocol, rng)
+            gt = obs["y3d"][WINDOW - 1:]
             for i, e in enumerate(eps):
                 for channel, kw in [("segments", {"seg_scale": 1 + e}), ("focal", {"focal_scale": 1 + e})]:
                     pred = predict_windows(model, obs, clip.joints, "full_priors", **kw)[WINDOW - 1:, -1]
-                    errs[channel][i].append(mpjpe(pred, obs["y3d"][WINDOW - 1:]).mean())
-    out = {"eps": list(eps), "clips": len(clips), "cameras": n_cameras}
+                    errs[channel][i].append(mpjpe(pred, gt).mean())
+                    ratios[channel][i].append(bone_ratio(pred, gt))
+    return sweep_summary(eps, errs, ratios, len(clips), n_cameras)
+
+
+def sweep_summary(eps, errs, ratios, n_clips, n_cameras):
+    """Summary of per-eps lists of per-(Clip, camera) errors (m) and bone ratios, per channel."""
+    out = {"eps": list(eps), "clips": n_clips, "cameras": n_cameras}
     for channel, per_eps in errs.items():
-        mm = [round(1000 * float(np.mean(e)), 2) for e in per_eps]
-        out[channel] = {"mpjpe_mm": mm, "slope_mm_per_eps": side_slopes(eps, mm)}
+        mm = 1000 * np.array(per_eps)                                    # (n_eps, n)
+        each = side_slopes(eps, mm)
+        ratio = np.array(ratios[channel])
+        out[channel] = {"mpjpe_mm": [round(float(v), 2) for v in mm.mean(axis=1)],
+                        "slope_mm_per_eps": side_slopes(eps, mm.mean(axis=1)),
+                        "slope_sem": {k: float(v.std(ddof=1) / np.sqrt(len(v))) if len(v) > 1 else 0.0 for k, v in each.items()},
+                        "bone_ratio": [round(float(v), 4) for v in ratio.mean(axis=1)],
+                        "follow": side_slopes(eps, ratio.mean(axis=1))}
     return out
 
 
@@ -145,10 +174,17 @@ def sweep_report(sweeps):
                   "| eps | " + " | ".join(f"{e:+.2f}" for e in sw["eps"]) + " |", "|---|" + "---|" * len(sw["eps"])]
         for channel in ["segments", "focal"]:
             lines.append(f"| {channel} | " + " | ".join(f"{v:.1f}" for v in sw[channel]["mpjpe_mm"]) + " |")
-        lines += ["", "| Slope (mm per unit eps) | eps > 0 | eps < 0 |", "|---|---|---|"]
+        lines.append("")
+        lines += ["Bone ratio (predicted / true length of the Segment prior pairs):", "",
+                  "| eps | " + " | ".join(f"{e:+.2f}" for e in sw["eps"]) + " |", "|---|" + "---|" * len(sw["eps"])]
         for channel in ["segments", "focal"]:
-            sl = sw[channel]["slope_mm_per_eps"]
-            lines.append(f"| {channel} | {sl['positive']:+.1f} | {sl['negative']:+.1f} |")
+            lines.append(f"| {channel} | " + " | ".join(f"{v:.3f}" for v in sw[channel]["bone_ratio"]) + " |")
+        lines += ["", "| | Slope eps > 0 (mm per unit eps) | Slope eps < 0 | Follow eps > 0 | Follow eps < 0 |",
+                  "|---|---|---|---|---|"]
+        for channel in ["segments", "focal"]:
+            sl, se, fo = sw[channel]["slope_mm_per_eps"], sw[channel]["slope_sem"], sw[channel]["follow"]
+            lines.append(f"| {channel} | {sl['positive']:+.1f} ± {se['positive']:.1f} | {sl['negative']:+.1f} ± {se['negative']:.1f} "
+                         f"| {fo['positive']:.2f} | {fo['negative']:.2f} |")
         lines.append("")
     return "\n".join(lines)
 
