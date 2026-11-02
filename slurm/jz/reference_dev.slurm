@@ -13,7 +13,9 @@
 # Research reference model (M0) on Jean Zay, one V100, in 2 h links. Each link runs the first
 # unfinished step and exits: Backbone training, Versatile training, evaluation (centered cameras),
 # evaluation (wild cameras) of the Versatile model, then of the Backbone. VARIANT=scratch trains the Versatile model from scratch instead (no
-# Backbone), in its own folder. Training stops itself before the walltime and resumes mid-epoch, so the
+# Backbone), in its own folder. VARIANT=full trains it from scratch on the
+# v1 Train clips plus the extra Train clips (full AMASS, FULL_EPOCHS epochs, default 6) and also evaluates it on
+# the Unseen clips. Training stops itself before the walltime and resumes mid-epoch, so the
 # same command is submitted again and again, for example as a chain of links (--dependency=afterany).
 # The project account is site-specific: pass it on the command line.
 #   sbatch --account=<account> slurm/jz/reference_dev.slurm
@@ -35,7 +37,9 @@ RUNS=${RUNS:-$SCRATCH/priorformer/runs}
 BACKBONE=$RUNS/reference_backbone
 VERSATILE=$RUNS/reference_versatile
 # stop training 100 min after the data is loaded: leaves time for loading, validation and the save
-TRAIN="python -u -m priorformer.train_v2 --data $DATA/train --workers $(( SLURM_CPUS_PER_TASK - 1 )) \
+TRAIN_DATA=$DATA/train
+[ "${VARIANT:-staged}" = full ] && TRAIN_DATA="$DATA/train $DATA/train_extra"
+TRAIN="python -u -m priorformer.train_v2 --data $TRAIN_DATA --workers $(( SLURM_CPUS_PER_TASK - 1 )) \
        --time-limit 100 --save-every 10"
 # generation 2 recipe, every training step: OneCycle (peak 3e-4, 1e-4 when fine-tuning), EMA weights,
 # Segment prior noise (±20% global, ±5% per segment, on half the Windows)
@@ -67,6 +71,14 @@ case ${VARIANT:-staged} in
             srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model versatile --out "$EVALUATE" ${TRAIN_ARGS:-}
             exit 0
         fi ;;
+    full)
+        EVALUATE=$RUNS/reference_full_amass
+        if [ ! -f "$EVALUATE/DONE" ]; then
+            echo "--- versatile from scratch, full AMASS"
+            srun --unbuffered $TRAIN $RECIPE --lr 3e-4 --model versatile --epochs ${FULL_EPOCHS:-6} \
+                --out "$EVALUATE" ${TRAIN_ARGS:-}
+            exit 0
+        fi ;;
     *) echo "unknown VARIANT=$VARIANT"; exit 1 ;;
 esac
 
@@ -83,4 +95,14 @@ for MODEL in $EVALUATE; do
         exit 0
     done
 done
+if [ "${VARIANT:-staged}" = full ]; then
+    for SETTING in centered wild; do
+        [ -f "$EVALUATE/eval_v2/unseen_$SETTING.json" ] && continue
+        echo "--- evaluate $(basename "$EVALUATE") $SETTING on the Unseen clips"
+        srun --unbuffered python -u -m priorformer.evaluate_v2 --checkpoint "$EVALUATE/best.pt" --clips "$DATA/unseen" \
+            --split splits/unseen_clips.tsv --cameras 10 --settings $SETTING --stretch \
+            --out "$EVALUATE/eval_v2/unseen_$SETTING.json" ${EVAL_ARGS:-}
+        exit 0
+    done
+fi
 echo "--- all done: $EVALUATE"

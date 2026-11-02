@@ -20,8 +20,10 @@ from pathlib import Path
 # run folder -> (job name of its loop, step name in the job log, run it waits for)
 RUNS = {"reference_backbone": ("pf_reference", "backbone", None),
         "reference_versatile": ("pf_reference", "versatile", "reference_backbone"),
-        "reference_versatile_scratch": ("pf_scratch", "versatile from scratch", None)}
-DEFAULT_EPOCHS = {"reference_backbone": 50, "reference_versatile": 20, "reference_versatile_scratch": 50}
+        "reference_versatile_scratch": ("pf_scratch", "versatile from scratch", None),
+        "reference_full_amass": ("pf_full", "versatile from scratch, full AMASS", None)}
+DEFAULT_EPOCHS = {"reference_backbone": 50, "reference_versatile": 20, "reference_versatile_scratch": 50,
+                  "reference_full_amass": 6}
 MODES = ["full_priors", "camera_estimated", "segments_masked", "no_priors"]
 SHORT = {"full_priors": "full", "camera_estimated": "cam est", "segments_masked": "seg mask", "no_priors": "none"}
 STALE_MINUTES = 20
