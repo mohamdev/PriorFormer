@@ -67,6 +67,12 @@ def log_tail(path, size=20000):
         return f.read().decode(errors="replace")
 
 
+def log_head(path, size=20000):
+    """The start of a job log, where each link prints its step (--- ...)."""
+    with open(path, "rb") as f:
+        return f.read(size).decode(errors="replace")
+
+
 def read_jsonl(path):
     if not path.exists():
         return []
@@ -97,7 +103,7 @@ def run_block(runs, logs, name, all_jobs, n_epochs):
     log_file = newest_log(logs, job_name)
     if log_file:
         tail = log_tail(log_file)
-        steps = re.findall(r"^--- (.+)$", tail, re.M)
+        steps = re.findall(r"^--- (.+)$", log_head(log_file) + tail, re.M)   # the step line scrolls out of the tail
         running_here = bool(steps) and (steps[-1] == step or steps[-1].startswith(f"evaluate {name} "))
     job_list = all_jobs.get(job_name, [])
     running = [j for j in job_list if j[1] == "RUNNING"]
